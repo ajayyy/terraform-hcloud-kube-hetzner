@@ -194,3 +194,51 @@ resource "null_resource" "configure_floating_ip" {
     hcloud_floating_ip_assignment.agents
   ]
 }
+
+resource "null_resource" "agent-update" {
+  for_each = local.agent_nodes
+
+  connection {
+    user           = "root"
+    private_key    = var.ssh_private_key
+    agent_identity = local.ssh_agent_identity
+    host           = module.agents[each.key].ipv4_address
+    port           = var.ssh_port
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "sysctl -w net.core.somaxconn=65535",
+      "sysctl -w net.ipv4.ip_local_port_range=\"1024 60999\"",
+      "sysctl -w net.ipv4.tcp_max_syn_backlog=4096",
+      "echo 'net.core.somaxconn=65535\nnet.ipv4.ip_local_port_range=1024 60999\nnet.ipv4.tcp_max_syn_backlog=4096' > /etc/sysctl.d/99-custom-conn-limits.conf"
+    ]
+  }
+
+  triggers = {
+    always_run = "${timestamp()}"
+  }
+}
+
+resource "null_resource" "redis-agent-update" {
+  for_each = { for k, v in local.agent_nodes : k => v if contains(v.labels, "ram=8gb") }
+
+  connection {
+    user           = "root"
+    private_key    = var.ssh_private_key
+    agent_identity = local.ssh_agent_identity
+    host           = module.agents[each.key].ipv4_address
+    port           = var.ssh_port
+  }
+
+  provisioner "remote-exec" {
+    # madvise is better than never
+    inline = [
+      "echo madvise > /sys/kernel/mm/transparent_hugepage/enabled"
+    ]
+  }
+
+  triggers = {
+    always_run = "${timestamp()}"
+  }
+}

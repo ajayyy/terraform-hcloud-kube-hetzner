@@ -155,3 +155,28 @@ resource "null_resource" "control_planes" {
     hcloud_network_subnet.control_plane
   ]
 }
+
+resource "null_resource" "control-plane-update" {
+  for_each = local.control_plane_nodes
+
+  connection {
+    user           = "root"
+    private_key    = var.ssh_private_key
+    agent_identity = local.ssh_agent_identity
+    host           = module.control_planes[each.key].ipv4_address
+    port           = var.ssh_port
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "sysctl -w net.core.somaxconn=65535",
+      "sysctl -w net.ipv4.ip_local_port_range=\"1024 60999\"",
+      "sysctl -w net.ipv4.tcp_max_syn_backlog=4096",
+      "echo 'net.core.somaxconn=65535\nnet.ipv4.ip_local_port_range=1024 60999\nnet.ipv4.tcp_max_syn_backlog=4096' > /etc/sysctl.d/99-custom-conn-limits.conf"
+    ]
+  }
+
+  triggers = {
+    always_run = "${timestamp()}"
+  }
+}

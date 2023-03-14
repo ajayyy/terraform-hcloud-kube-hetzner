@@ -27,6 +27,8 @@ locals {
 
   common_commands_install_k3s = concat(
     [
+      "sysctl -w net.core.somaxconn=65535; sysctl -w net.ipv4.ip_local_port_range=\"1024 60999\"",
+      "echo 'net.core.somaxconn=65535\nnet.ipv4.ip_local_port_range=1024 60999' > /etc/sysctl.d/99-custom-conn-limits.conf",
       "set -ex",
       # prepare the k3s config directory
       "mkdir -p /etc/rancher/k3s",
@@ -317,7 +319,7 @@ locals {
     },
   var.etcd_s3_backup) : {}
 
-  kubelet_arg                 = ["cloud-provider=external", "volume-plugin-dir=/var/lib/kubelet/volumeplugins"]
+  kubelet_arg                 = ["cloud-provider=external", "volume-plugin-dir=/var/lib/kubelet/volumeplugins", "allowed-unsafe-sysctls=net.core.somaxconn,net.ipv4.tcp_max_syn_backlog"]
   kube_controller_manager_arg = "flex-volume-plugin-dir=/var/lib/kubelet/volumeplugins"
   flannel_iface               = "eth1"
 
