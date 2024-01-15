@@ -166,11 +166,15 @@ spec:
               memory: 300Mi
           command:
             - ./cluster-autoscaler
-            - --v=1
+            - --v=${cluster_autoscaler_log_level}
+            - --logtostderr=${cluster_autoscaler_log_to_stderr}
+            - --stderrthreshold=${cluster_autoscaler_stderr_threshold}
             - --cloud-provider=hetzner
-            - --stderrthreshold=info
             %{~ for pool in node_pools ~}
             - --nodes=${pool.min_nodes}:${pool.max_nodes}:${pool.server_type}:${pool.location}:${cluster_name}${pool.name}
+            %{~ endfor ~}
+            %{~ for extra_arg in cluster_autoscaler_extra_args ~}
+            - ${extra_arg}
             %{~ endfor ~}
           env:
           - name: HCLOUD_TOKEN
@@ -180,12 +184,14 @@ spec:
                   key: token
           - name: HCLOUD_CLOUD_INIT
             value: ${cloudinit_config}
+          - name: HCLOUD_CLUSTER_CONFIG
+            value: ${cluster_config}
           - name: HCLOUD_SSH_KEY
             value: '${ssh_key}'
-          - name: HCLOUD_NETWORK
-            value: '${ipv4_subnet_id}'
           - name: HCLOUD_IMAGE
             value: '${snapshot_id}'
+          - name: HCLOUD_NETWORK
+            value: '${ipv4_subnet_id}'
           - name: HCLOUD_FIREWALL
             value: '${firewall_id}'
           volumeMounts:

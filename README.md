@@ -24,13 +24,15 @@ To achieve this, we built up on the shoulders of giants by choosing [openSUSE Mi
 ![Product Name Screen Shot][product-screenshot]
 
 **Why OpenSUSE MicroOS (and not Ubuntu)?**
+
 - Optimized container OS that is fully locked down, most of the filesystem is read-only!
 - Hardened by default with an automatic ban for abusive IPs on SSH for instance.
-- Evergreen release, your node will stay valid forever, as it piggy-backs into OpenSUSE Tumbleweed's rolling release!
-- Automatic updates by default and automatic roll-backs if something breaks, thanks to its use of BTRFS snapshots.
+- Evergreen release, your node will stay valid forever, as it piggybacks into OpenSUSE Tumbleweed's rolling release!
+- Automatic updates by default and automatic rollbacks if something breaks, thanks to its use of BTRFS snapshots.
 - Supports [Kured](https://github.com/kubereboot/kured) to properly drain and reboot nodes in an HA fashion.
 
 **Why k3s?**
+
 - Certified Kubernetes Distribution, it is automatically synced to k8s source.
 - Fast deployment, as it is a single binary and can be deployed with a single command.
 - Comes with batteries included, with its in-cluster [helm-controller](https://github.com/k3s-io/helm-controller).
@@ -39,7 +41,10 @@ To achieve this, we built up on the shoulders of giants by choosing [openSUSE Mi
 ### Features
 
 - [x] **Maintenance-free** with auto-upgrades to the latest version of MicroOS and k3s.
+- [x] **Multi-architecture support**, choose any Hetzner cloud instances, including the cheaper CAX ARM instances.
 - [x] Proper use of the **Hetzner private network** to minimize latency.
+- [x] Choose between **Flannel, Calico, or Cilium** as CNI.
+- [x] Optional **Wireguard** encryption of the Kube network for added security.
 - [x] **Traefik** or **Nginx** as ingress controller attached to a Hetzner load balancer with Proxy Protocol turned on.
 - [x] **Automatic HA** with the default setting of three control-plane nodes and two agent nodes.
 - [x] **Autoscaling** nodes via the [kubernetes autoscaler](https://github.com/kubernetes/autoscaler).
@@ -49,9 +54,8 @@ To achieve this, we built up on the shoulders of giants by choosing [openSUSE Mi
 - [x] Ability to **add nodes and nodepools** when the cluster is running.
 - [x] Possibility to toggle **Longhorn** and **Hetzner CSI**.
 - [x] Encryption at rest fully functional in both **Longhorn** and **Hetzner CSI**.
-- [x] Choose between **Flannel, Calico, or Cilium** as CNI.
-- [x] Optional **Wireguard** encryption of the Kube network for added security.
 - [x] Optional use of **Floating IPs** for use via Cilium's Egress Gateway.
+- [x] Proper IPv6 support for inbound/outbound traffic.
 - [x] **Flexible configuration options** via variables and an extra Kustomization option.
 
 _It uses Terraform to deploy as it's easy to use, and Hetzner has a great [Hetzner Terraform Provider](https://registry.terraform.io/providers/hetznercloud/hcloud/latest/docs)._
@@ -66,30 +70,66 @@ Follow those simple steps, and your world's cheapest Kubernetes cluster will be 
 
 First and foremost, you need to have a Hetzner Cloud account. You can sign up for free [here](https://hetzner.com/cloud/).
 
-Then you'll need to have [terraform](https://learn.hashicorp.com/tutorials/terraform/install-cli),  [kubectl](https://kubernetes.io/docs/tasks/tools/) cli and [hcloud](<https://github.com/hetznercloud/cli>) the Hetzner cli. The easiest way is to use the [homebrew](https://brew.sh/) package manager to install them (available on Linux, Mac, and Windows Linux Subsystem).
+Then you'll need to have [terraform](https://learn.hashicorp.com/tutorials/terraform/install-cli) or [tofu](https://opentofu.org/docs/intro/install/), [packer](https://developer.hashicorp.com/packer/tutorials/docker-get-started/get-started-install-cli#installing-packer) (for the initial snapshot creation only, no longer needed once that's done), [kubectl](https://kubernetes.io/docs/tasks/tools/) cli and [hcloud](https://github.com/hetznercloud/cli) the Hetzner cli for convenience. The easiest way is to use the [homebrew](https://brew.sh/) package manager to install them (available on Linux, Mac, and Windows Linux Subsystem).
 
 ```sh
-brew install terraform
+brew install terraform # or brew install opentofu
+brew install packer
 brew install kubectl
 brew install hcloud
-
 ```
 
-### 💡 [Do not skip] Creating your kube.tf file
+### 💡 [Do not skip] Creating your kube.tf file and the OpenSUSE MicroOS snapshot
 
-1. Create a project in your [Hetzner Cloud Console](https://console.hetzner.cloud/), and go to **Security > API Tokens** of that project to grab the API key. Take note of the key! ✅
-1. Generate a passphrase-less ed25519 SSH key pair for your cluster; take note of the respective paths of your private and public keys. Or, see our detailed [SSH options](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/blob/master/docs/ssh.md). ✅
-1. Prepare the module by copying `kube.tf.example` to `kube.tf` **in a new folder** which you cd into, then replace the values from steps 1 and 2. ✅
-1. (Optional) Many variables in `kube.tf` can be customized to suit your needs, you can do so if you want. ✅
-1. At this stage you should be in your new folder, with a fresh `kube.tf` file, if it is so, you can proceed forward! ✅
+1. Create a project in your [Hetzner Cloud Console](https://console.hetzner.cloud/), and go to **Security > API Tokens** of that project to grab the API key, it needs to be Read & Write. Take note of the key! ✅
+2. Generate a passphrase-less ed25519 SSH key pair for your cluster; take note of the respective paths of your private and public keys. Or, see our detailed [SSH options](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/blob/master/docs/ssh.md). ✅
+3. Now navigate to where you want to have your project live and execute the following command, which will help you get started with a **new folder** along with the required files, and will propose you to create a needed MicroOS snapshot. ✅
 
-_A complete reference of all inputs, outputs, modules etc. can be found in the [terraform.md](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/blob/master/docs/terraform.md) file._
+   ```sh
+   tmp_script=$(mktemp) && curl -sSL -o "${tmp_script}" https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/master/scripts/create.sh && chmod +x "${tmp_script}" && "${tmp_script}" && rm "${tmp_script}"
+   ```
 
-_It's important to realize that your kube.tf needs to reside in a NEW EMPTY folder, not a clone of this git repo (the module by default will be fetched from the Terraform registry). All you need is to re-use the [kube.tf.example](https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/master/kube.tf.example) file to make sure you get the format right._
+   Or for fish shell:
+
+   ```fish
+   set tmp_script (mktemp); curl -sSL -o "{tmp_script}" https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/master/scripts/create.sh; chmod +x "{tmp_script}"; bash "{tmp_script}"; rm "{tmp_script}"
+   ```
+
+   _Optionally, for future usage, save that command as an alias in your shell preferences, like so:_
+
+   ```sh
+   alias createkh='tmp_script=$(mktemp) && curl -sSL -o "${tmp_script}" https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/master/scripts/create.sh && chmod +x "${tmp_script}" && "${tmp_script}" && rm "${tmp_script}"'
+   ```
+
+   Or for fish shell:
+
+   ```fish
+   alias createkh='set tmp_script (mktemp); curl -sSL -o "{tmp_script}" https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/master/scripts/create.sh; chmod +x "{tmp_script}"; bash "{tmp_script}"; rm "{tmp_script}"'
+   ```
+
+   _For the curious, here is what the script does:_
+
+   ```sh
+   mkdir /path/to/your/new/folder
+   cd /path/to/your/new/folder
+   curl -sL https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/master/kube.tf.example -o kube.tf
+   curl -sL https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/master/packer-template/hcloud-microos-snapshots.pkr.hcl -o hcloud-microos-snapshots.pkr.hcl
+   export HCLOUD_TOKEN="your_hcloud_token"
+   packer init hcloud-microos-snapshots.pkr.hcl
+   packer build hcloud-microos-snapshots.pkr.hcl
+   hcloud context create <project-name>
+   ```
+
+4. In that new project folder that gets created, you will find your `kube.tf` and it must be customized to suit your needs. ✅
+
+   _A complete reference of all inputs, outputs, modules etc. can be found in the [terraform.md](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/blob/master/docs/terraform.md) file._
 
 ### 🎯 Installation
 
+Now that you have your `kube.tf` file, along with the OS snapshot in Hetzner project, you can start the installation process:
+
 ```sh
+cd <your-project-folder>
 terraform init --upgrade
 terraform validate
 terraform apply -auto-approve
@@ -97,13 +137,23 @@ terraform apply -auto-approve
 
 It will take around 5 minutes to complete, and then you should see a green output confirming a successful deployment.
 
-_Once you start with Terraform, it's best not to change the state of the project manually via the Hetzner UI; otherwise, you may get an error when you try to run terraform again for that cluster (when trying to change the number of nodes for instance)._
+_Once you start with Terraform, it's best not to change the state of the project manually via the Hetzner UI; otherwise, you may get an error when you try to run terraform again for that cluster (when trying to change the number of nodes for instance). If you want to inspect your Hetzner project, learn to use the hcloud cli._
 
 ## Usage
 
 When your brand-new cluster is up and running, the sky is your limit! 🎉
 
-You can immediately kubectl into it (using the `clustername_kubeconfig.yaml` saved to the project's directory after the installation). By doing `kubectl --kubeconfig clustername_kubeconfig.yaml`, but for more convenience, either create a symlink from `~/.kube/config` to `clustername_kubeconfig.yaml` or add an export statement to your `~/.bashrc` or `~/.zshrc` file, as follows (you can get the path of `clustername_kubeconfig.yaml` by running `pwd`):
+You can view all kinds of details about the cluster by running `terraform output kubeconfig` or `terraform output -json kubeconfig | jq`.
+
+To manage your cluster with `kubectl`, you can either use SSH to connect to a control plane node or connect to the Kube API directly.
+
+### Connect via SSH
+
+You can connect to one of the control plane nodes via SSH with `ssh root@<control-plane-ip> -i /path/to/private_key -o StrictHostKeyChecking=no`. Now you are able to use `kubectl` to manage your workloads right away. By default, the firewall allows SSH connections from everywhere. Best to change that to your own IP by configuring the `firewall_ssh_source` in your kube.tf file (don't worry, you can always change it for deploy if your IP changes).
+
+### Connect via Kube API
+
+If you have access to the Kube API (depending on the value of your `firewall_kube_api_source` variable, best to have the value of your own IP and not open to the world), you can immediately kubectl into it (using the `clustername_kubeconfig.yaml` saved to the project's directory after the installation). By doing `kubectl --kubeconfig clustername_kubeconfig.yaml`, but for more convenience, either create a symlink from `~/.kube/config` to `clustername_kubeconfig.yaml` or add an export statement to your `~/.bashrc` or `~/.zshrc` file, as follows (you can get the path of `clustername_kubeconfig.yaml` by running `pwd`):
 
 ```sh
 export KUBECONFIG=/<path-to>/clustername_kubeconfig.yaml
@@ -111,19 +161,17 @@ export KUBECONFIG=/<path-to>/clustername_kubeconfig.yaml
 
 If chose to turn `create_kubeconfig` to false in your kube.tf (good practice), you can still create this file by running `terraform output --raw kubeconfig > clustername_kubeconfig.yaml` and then use it as described above.
 
-You can also use it in an automated flow, in which case `create_kubeconfig` should be set to false, and you can use the `kubeconfig` output variable to get the kubeconfig file in a structured data format.
-
-_You can view all kinds of details about the cluster by running `terraform output kubeconfig` or `terraform output -json kubeconfig | jq`._
+_You can also use it in an automated flow, in which case `create_kubeconfig` should be set to false, and you can use the `kubeconfig` output variable to get the kubeconfig file in a structured data format._
 
 ## CNI
 
 The default is Flannel, but you can also choose Calico or Cilium, by setting the `cni_plugin` variable in `kube.tf` to "calico" or "cilium".
 
-As Cilium has a lot of interesting and powerful config possibilities, we give you the ability to configure Cilium with the helm `cilium_values` variable (see the cilium specific [helm values](https://github.com/cilium/cilium/blob/master/install/kubernetes/cilium/values.yaml])) before you deploy your cluster.
+As Cilium has a lot of interesting and powerful config possibilities, we give you the ability to configure Cilium with the helm `cilium_values` variable (see the cilium specific [helm values](https://github.com/cilium/cilium/blob/master/install/kubernetes/cilium/values.yaml)) before you deploy your cluster.
 
 ## Scaling Nodes
 
-Two things can be scaled: the number of nodepools or the number of nodes in these nodepools. You have two lists of nodepools you can add to your `kube.tf`, the control plane nodepool and the agent nodepool list. Combined, they cannot exceed 255 nodepools (you are extremely unlikely to reach this limit). As for the count of nodes per nodepools, if you raise your limits in Hetzner, you can have up to 64,670 nodes per nodepool (also very unlikely to need that much).
+Two things can be scaled: the number of nodepools or the number of nodes in these nodepools.
 
 There are some limitations (to scaling down mainly) that you need to be aware of:
 
@@ -151,7 +199,7 @@ Otherwise, it is essential to turn off automatic OS upgrades (k3s can continue t
 
 ### The Default Setting
 
-By default, MicroOS gets upgraded automatically on each node and reboot safely via [Kured](https://github.com/weaveworks/kured) installed in the cluster.
+By default, MicroOS gets upgraded automatically on each node and reboot safely via [Kured](https://github.com/kubereboot/kured) installed in the cluster.
 
 As for k3s, it also automatically upgrades thanks to Rancher's [system upgrade controller](https://github.com/rancher/system-upgrade-controller). By default, it will be set to the `initial_k3s_channel`, but you can also set it to `stable`, `latest`, or one more specific like `v1.23` if needed or specify a target version to upgrade to via the upgrade plan (this also allows for downgrades).
 
@@ -185,10 +233,10 @@ _If you wish to turn off automatic k3s upgrades, you need to set:_
 automatically_upgrade_k3s = false
 ```
 
-_Alternatively, you can either remove the `k3s_upgrade=true` label or set it to `false`. This needs to happen for all the nodes too! To remove it, apply:_
+_Alternatively, you can either remove the `k3s_upgrade=true` label or set it to `false`. This needs to happen for all the nodes too! To remove the node label completely, apply `-` at the end of the label:
 
 ```sh
-kubectl -n system-upgrade label node <node-name> k3s_upgrade-
+kubectl label node <node-name> k3s_upgrade-
 ```
 
 Alternatively, you can disable the k3s automatic upgrade without individually editing the labels on the nodes. Instead, you can just delete the two system controller upgrade plans with:
@@ -210,24 +258,26 @@ reboot
 Rarely needed, but can be handy in the long run. During the installation, we automatically download a backup of the kustomization to a `kustomization_backup.yaml` file. You will find it next to your `clustername_kubeconfig.yaml` at the root of your project.
 
 1. First create a duplicate of that file and name it `kustomization.yaml`, keeping the original file intact, in case you need to restore the old config.
-1. Edit the `kustomization.yaml` file; you want to go to the very bottom where you have the links to the different source files; grab the latest versions for each on GitHub, and replace. If present, remove any local reference to traefik_config.yaml, as Traefik is updated automatically by the system upgrade controller.
-1. Apply the updated `kustomization.yaml` with `kubectl apply -k ./`.
+2. Edit the `kustomization.yaml` file; you want to go to the very bottom where you have the links to the different source files; grab the latest versions for each on GitHub, and replace. If present, remove any local reference to traefik_config.yaml, as Traefik is updated automatically by the system upgrade controller.
+3. Apply the updated `kustomization.yaml` with `kubectl apply -k ./`.
 
 ## Customizing the Cluster Components
 
 Most cluster components of Kube-Hetzner are deployed with the Rancher [Helm Chart](https://rancher.com/docs/k3s/latest/en/helm/) yaml definition and managed by the Helm Controller inside k3s.
 
-By default, we strive to give you optimal defaults, but if wish, you can customize them.
+By default, we strive to give you optimal defaults, but if you wish, you can customize them.
 
 For Traefik, Nginx, Rancher, Cilium, Traefik, and Longhorn, for maximum flexibility, we give you the ability to configure them even better via helm values variables (e.g. `cilium_values`, see the advanced section in the kube.tf.example for more).
 
 ## Adding Extras
 
-If you need to install additional Helm charts or Kubernetes manifests that are not provided by default, you can easily do so by using [Kustomize](https://kustomize.io). This is done by creating the `extra-manifests/kustomization.yaml.tpl` directory/file beside your `kube.tf`.
+If you need to install additional Helm charts or Kubernetes manifests that are not provided by default, you can easily do so by using [Kustomize](https://kustomize.io). This is done by creating one or more `extra-manifests/kustomization.yaml.tpl` files beside your `kube.tf`.
 
-This file needs to be a valid `Kustomization` manifest, but it supports terraform templating! (The templating parameters can be passed via the `extra_kustomize_parameters` variable (via a map) to the module).
+These files need to be valid `Kustomization` manifests, additionally supporting terraform templating! (The templating parameters can be passed via the `extra_kustomize_parameters` variable (via a map) to the module).
 
-All files in the `extra-manifests` directory including the rendered version of `kustomization.yaml.tpl` will be applied to k3s with `kubectl apply -k` (which will be executed after and independently of the basic cluster configuration).
+All files in the `extra-manifests` directory including the rendered versions of the `*.yaml.tpl` will be applied to k3s with `kubectl apply -k` (which will be executed after and independently of the basic cluster configuration).
+
+See a working example in [examples/kustomization_user_deploy](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/tree/master/examples/kustomization_user_deploy).
 
 _You can use the above to pass all kinds of Kubernetes YAML configs, including HelmChart and/or HelmChartConfig definitions (see the previous section if you do not know what those are in the context of k3s)._
 
@@ -236,7 +286,27 @@ _That said, you can also use pure Terraform and import the kube-hetzner module a
 ## Examples
 
 <details>
-  
+
+<summary>Custom post-install actions</summary>
+
+After the initial bootstrapping of your Kubernetes cluster, you might want to deploy applications using the same terraform mechanism. For many scenarios it is sufficient to create a `kustomization.yaml.tpl` file (see [Adding Extras](#adding-extras)). All applied kustomizations will be applied at once by executing a single `kubectl apply -k` command.
+
+However, some applications that e.g. provide custom CRDs (e.g. [ArgoCD](https://argoproj.github.io/cd/)) need a different deployment strategy: one has to deploy CRDs first, then wait for the deployment, before being able to install the actual application. In the ArgoCD case, not waiting for the CRD setup to finish will cause failures. Therefore, an additional mechanism is available to support these kind of deployments. Specify `extra_kustomize_deployment_commands` in your `kube.tf` file containing a series of commands to be executed, after the `Kustomization` step finished:
+
+```
+  extra_kustomize_deployment_commands = <<-EOT
+    kubectl -n argocd wait --for condition=established --timeout=120s crd/appprojects.argoproj.io
+    kubectl -n argocd wait --for condition=established --timeout=120s crd/applications.argoproj.io
+    kubectl apply -f /var/user_kustomize/argocd-projects.yaml
+    kubectl apply -f /var/user_kustomize/argocd-application-argocd.yaml
+    ...
+  EOT
+```
+
+</details>
+
+<details>
+
 <summary>Useful Cilium commands</summary>
 
 With Kube-Hetzner, you have the possibility to use Cilium as a CNI. It's very powerful and has great observability features. Below you will find a few useful commands.
@@ -261,7 +331,7 @@ kubectl -n kube-system exec --stdin --tty cilium-xxxx -- cilium service list
 ```
 
 _For more cilium commands, please refer to their corresponding [Documentation](https://docs.cilium.io/en/latest/cheatsheet)._
-  
+
 </details>
 
 <details>
@@ -274,7 +344,8 @@ Using Floating IPs makes it possible to get rid of the problem of changing the p
 To implement the Cilium Egress Gateway feature, you need to define a separate nodepool with the setting `floating_ip = true` in the nodepool configuration parameter block.
 
 Example nodepool configuration:
-```
+
+```tf
 {
   name        = "egress",
   server_type = "cpx11",
@@ -291,7 +362,8 @@ Example nodepool configuration:
 ```
 
 Configure Cilium:
-```
+
+```tf
 locals {
   cluster_ipv4_cidr = "10.42.0.0/16"
 }
@@ -300,15 +372,21 @@ cluster_ipv4_cidr = local.cluster_ipv4_cidr
 
 cilium_values = <<EOT
 ipam:
-  operator:
-    clusterPoolIPv4PodCIDRList:
-      - ${local.cluster_ipv4_cidr}
-kubeProxyReplacement: strict
-l7Proxy: "false"
+  mode: kubernetes
+k8s:
+  requireIPv4PodCIDR: true
+kubeProxyReplacement: true
+routingMode: native
+ipv4NativeRoutingCIDR: "10.0.0.0/8"
+endpointRoutes:
+  enabled: true
+loadBalancer:
+  acceleration: native
 bpf:
-  masquerade: "true"
+  masquerade: true
 egressGateway:
-  enabled: "true"
+  enabled: true
+MTU: 1450
 EOT
 ```
 
@@ -325,14 +403,16 @@ metadata:
   name: egress-sample
 spec:
   selectors:
-  - podSelector:
-      matchLabels:
-        org: empire
-        class: mediabot
-        io.kubernetes.pod.namespace: default
+    - podSelector:
+        matchLabels:
+          org: empire
+          class: mediabot
+          io.kubernetes.pod.namespace: default
 
   destinationCIDRs:
-  - "0.0.0.0/0"
+    - "0.0.0.0/0"
+  excludedCIDRs:
+    - "10.0.0.0/8"
 
   egressGateway:
     nodeSelector:
@@ -341,7 +421,7 @@ spec:
 
     # Specify the IP address used to SNAT traffic matched by the policy.
     # It must exist as an IP associated with a network interface on the instance.
-    egressIP: {FLOATING_IP}
+    egressIP: { FLOATING_IP }
 ```
 
 </details>
@@ -350,15 +430,13 @@ spec:
 
 <summary>Ingress with TLS</summary>
 
-You have two options, the first is to use `Cert-Manager` to take care of the certificates, and the second is to let `Traefik` bear this responsibility.
-
 _We advise you to use `Cert-Manager`, as it supports HA setups without requiring you to use the enterprise version of Traefik. The reason for that is that according to Traefik themselves, Traefik CE (community edition) is stateless, and it's not possible to run multiple instances of Traefik CE with LetsEncrypt enabled. Meaning, you cannot have your ingress be HA with Traefik if you use the community edition and have activated the LetsEncrypt resolver. You could however use Traefik EE (enterprise edition) to achieve that. Long story short, if you are going to use Traefik CE (like most of us), you should use Cert-Manager to generate the certificates. Source [here](https://doc.traefik.io/traefik/v2.0/providers/kubernetes-crd/)._
 
 ### Via Cert-Manager (recommended)
 
-In your module variables, set `enable_cert_manager` to `true`, and just create your issuers as described here <https://cert-manager.io/docs/configuration/acme/>.
+Create your issuers as described here <https://cert-manager.io/docs/configuration/acme/>.
 
-Then in your Ingress definition, just mentioning the issuer as an annotation and giving a secret name will take care of instructing Cert-Manager to generate a certificate for it! It is simpler than the alternative, you just have to configure your issuer(s) first with the method of your choice.
+Then in your Ingress definition, just mentioning the issuer as an annotation and giving a secret name will take care of instructing Cert-Manager to generate a certificate for it! You just have to configure your issuer(s) first with the method of your choice. Detailed instructions on how to configure `Cert-manager` with Traefik can be found at https://traefik.io/blog/secure-web-applications-with-traefik-proxy-cert-manager-and-lets-encrypt/.
 
 Ingress example:
 
@@ -371,25 +449,52 @@ metadata:
     cert-manager.io/cluster-issuer: letsencrypt
 spec:
   tls:
-  - hosts:
-    - '*.example.com'
-    secretName: example-com-letsencrypt-tls
+    - hosts:
+        - "*.example.com"
+      secretName: example-com-letsencrypt-tls
   rules:
-  - host: '*.example.com'
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: my-service
-            port:
-              number: 80
+    - host: "*.example.com"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-service
+                port:
+                  number: 80
 ```
-  
+
 _⚠️ In case of using Ingress-Nginx as an ingress controller if you choose to use the HTTP challenge method you need to do an additional step of adding variable `lb_hostname = "cluster.example.org"` to your kube.tf. You must set it to an FQDN that points to your LB address._
-  
-_This is to circumvent this known issue https://github.com/cert-manager/cert-manager/issues/466, also see https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/issues/354. Otherwise, you can just use the DNS challenge, which does not require any additional tweaks to work._
+
+_This is to circumvent this known issue [cert-manager/cert-manager/issues/466](https://github.com/cert-manager/cert-manager/issues/466). Otherwise, you can just use the DNS challenge, which does not require any additional tweaks to work._
+
+</details>
+
+<details>
+
+<summary>Create or delete a snapshot</summary>
+
+Apart from the installation script, you can always create or delete the OS snapshot manually.
+
+To create a snapshot, run the following command:
+
+```bash
+export HCLOUD_TOKEN=<your-token>
+packer build ./packer-template/hcloud-microos-snapshots.pkr.hcl
+```
+
+To delete a snapshot, first find it with:
+
+```bash
+hcloud image list
+```
+
+Then delete it with:
+
+```bash
+hcloud image delete <image-id>
+```
 
 </details>
 
@@ -408,6 +513,8 @@ When doing so, `automatically_upgrade_os` should be set to `false`, especially w
 <summary>Use in Terraform cloud</summary>
 
 To use Kube-Hetzner on Terraform cloud, use as a Terraform module as mentioned above, but also change the execution mode from `remote` to `local`.
+
+Also make sure you have the OS snapshot already created in your project, for that, follow the installation script.
 
 </details>
 
@@ -438,8 +545,10 @@ The same goes for all add-ons, like Longhorn, Cert-manager, and Traefik.
 
 <summary>Encryption at rest with HCloud CSI</summary>
 
-The easiest way to get encrypted volumes working is actually to use the new encryption functionality of hcloud csi itself, see https://github.com/hetznercloud/csi-driver.
-For this, you just need to create a secret containing the encryption key
+The easiest way to get encrypted volumes working is actually to use the new encryption functionality of hcloud csi itself, see [hetznercloud/csi-driver](https://github.com/hetznercloud/csi-driver).
+
+For this, you just need to create a secret containing the encryption key:
+
 ```yaml
 apiVersion: v1
 kind: Secret
@@ -449,19 +558,21 @@ metadata:
 stringData:
   encryption-passphrase: foobar
 ```
-and to create a new storage class
+
+And to create a new storage class:
+
 ```yaml
-  apiVersion: storage.k8s.io/v1
-  kind: StorageClass
-  metadata:
-    name: hcloud-volumes-encrypted
-  provisioner: csi.hetzner.cloud
-  reclaimPolicy: Delete
-  volumeBindingMode: WaitForFirstConsumer
-  allowVolumeExpansion: true
-  parameters:
-    csi.storage.k8s.io/node-publish-secret-name: encryption-secret
-    csi.storage.k8s.io/node-publish-secret-namespace: kube-system
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hcloud-volumes-encrypted
+provisioner: csi.hetzner.cloud
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters:
+  csi.storage.k8s.io/node-publish-secret-name: encryption-secret
+  csi.storage.k8s.io/node-publish-secret-namespace: kube-system
 ```
 
 </details>
@@ -469,7 +580,8 @@ and to create a new storage class
 <details>
 
 <summary>Encryption at rest with Longhorn</summary>
-To get started, use a cluster-wide key for all volumes like this,
+To get started, use a cluster-wide key for all volumes like this:
+
 ```yaml
 apiVersion: v1
 kind: Secret
@@ -484,7 +596,9 @@ stringData:
   CRYPTO_KEY_SIZE: "256"
   CRYPTO_PBKDF: "argon2i"
 ```
-and create a new storage class
+
+And create a new storage class:
+
 ```yaml
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
@@ -507,9 +621,239 @@ parameters:
   csi.storage.k8s.io/node-stage-secret-name: "longhorn-crypto"
   csi.storage.k8s.io/node-stage-secret-namespace: "longhorn-system"
 ```
+
 For more details, see [Longhorn's documentation](https://longhorn.io/docs/1.4.0/advanced-resources/security/volume-encryption/).
 
 </details>
+
+<details>
+<summary>Assign all pods in a namespace to either arm64 or amd64 nodes with admission controllers</summary>
+
+To enable the [PodNodeSelector and optionally the PodTolerationRestriction](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#podnodeselector) api modules, set the following value:
+
+```terraform
+k3s_exec_server_args = "--kube-apiserver-arg enable-admission-plugins=PodTolerationRestriction,PodNodeSelector"
+```
+
+Next, you can set default nodeSelector values per namespace. This lets you assign namespaces to specific nodes. Note though, that this is the default as well as the whitelist, so if a pod sets its own nodeSelector value that must be a subset of the default. Otherwise, the pod will not be scheduled.
+
+Then set the according annotations on your namespaces:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    scheduler.alpha.kubernetes.io/node-selector: kubernetes.io/arch=amd64
+  name: this-runs-on-amd64
+```
+
+or with taints and tolerations:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    scheduler.alpha.kubernetes.io/node-selector: kubernetes.io/arch=arm64
+    scheduler.alpha.kubernetes.io/defaultTolerations: '[{ "operator" : "Equal", "effect" : "NoSchedule", "key" : "workload-type", "value" : "machine-learning" }]'
+  name: this-runs-on-arm64
+```
+
+This can be helpful when you set up a mixed-architecture cluster, and there are many other use cases.
+
+</details>
+
+<details>
+
+<summary>Backup and restore a cluster</summary>
+
+K3s allows for automated etcd backups to S3. Etcd is the default storage backend on kube-hetzner, even for a single control plane cluster, hence this should work for all cluster deployments.
+
+**For backup do:**
+
+1. Fill the kube.tf config `etcd_s3_backup`, it will trigger a regular automated backup to S3.
+2. Add the k3s_token as an output to your kube.tf
+
+```tf
+output "k3s_token" {
+  value     = module.kube-hetzner.k3s_token
+  sensitive = true
+}
+```
+
+3. Make sure you can access the k3s_token via `terraform output k3s_token`.
+
+**For restoration do:**
+
+1. Before cluster creation, add the following to your kube.tf. Replace the local variables to match your values.
+
+```tf
+locals {
+  # ...
+
+  k3s_token = var.k3s_token  # this is secret information, hence it is passed as an environment variable
+
+  # to get the corresponding etcd_version for a k3s version you need to
+  # - start k3s or have it running
+  # - run `curl -L --cacert /var/lib/rancher/k3s/server/tls/etcd/server-ca.crt --cert /var/lib/rancher/k3s/server/tls/etcd/server-client.crt --key /var/lib/rancher/k3s/server/tls/etcd/server-client.key https://127.0.0.1:2379/version`
+  # for details see https://gist.github.com/superseb/0c06164eef5a097c66e810fe91a9d408
+  etcd_version = "v3.5.9"
+
+  etcd_snapshot_name = "name-of-the-snapshot(no-path,just-the-name)"
+  etcd_s3_endpoint = "your-s3-endpoint(without-https://)"
+  etcd_s3_bucket = "your-s3-bucket"
+  etcd_s3_access_key = "your-s3-access-key"
+  etcd_s3_secret_key = var.etcd_s3_secret_key  # this is secret information, hence it is passed as an environment variable
+
+  # ...
+}
+
+variable "k3s_token" {
+  sensitive = true
+  type      = string
+}
+
+variable "etcd_s3_secret_key" {
+  sensitive = true
+  type      = string
+}
+
+module "kube-hetzner" {
+  # ...
+
+  k3s_token = local.k3s_token
+
+  # ...
+
+  postinstall_exec = [
+    (
+      local.etcd_snapshot_name == "" ? "" :
+      <<-EOF
+      export CLUSTERINIT=$(cat /etc/rancher/k3s/config.yaml | grep -i '"cluster-init": true')
+      if [ -n "$CLUSTERINIT" ]; then
+        echo indeed this is the first control plane node > /tmp/restorenotes
+        k3s server \
+          --cluster-reset \
+          --etcd-s3 \
+          --cluster-reset-restore-path=${local.etcd_snapshot_name} \
+          --etcd-s3-endpoint=${local.etcd_s3_endpoint} \
+          --etcd-s3-bucket=${local.etcd_s3_bucket} \
+          --etcd-s3-access-key=${local.etcd_s3_access_key} \
+          --etcd-s3-secret-key=${local.etcd_s3_secret_key}
+        # renaming the k3s.yaml because it is used as a trigger for further downstream
+        # changes. Better to let `k3s server` create it as expected.
+        mv /etc/rancher/k3s/k3s.yaml /etc/rancher/k3s/k3s.backup.yaml
+
+        # download etcd/etcdctl for adapting the kubernetes config before starting k3s
+        ETCD_VER=${local.etcd_version}
+        case "$(uname -m)" in
+            aarch64) ETCD_ARCH="arm64" ;;
+            x86_64) ETCD_ARCH="amd64" ;;
+        esac;
+        DOWNLOAD_URL=https://github.com/etcd-io/etcd/releases/download
+        rm -f /tmp/etcd-$ETCD_VER-linux-$ETCD_ARCH.tar.gz
+        curl -L $DOWNLOAD_URL/$ETCD_VER/etcd-$ETCD_VER-linux-$ETCD_ARCH.tar.gz -o /tmp/etcd-$ETCD_VER-linux-$ETCD_ARCH.tar.gz
+        tar xzvf /tmp/etcd-$ETCD_VER-linux-$ETCD_ARCH.tar.gz -C /usr/local/bin --strip-components=1
+        rm -f /tmp/etcd-$ETCD_VER-linux-$ETCD_ARCH.tar.gz
+
+        etcd --version
+        etcdctl version
+
+        # start etcd server in the background
+        nohup etcd --data-dir /var/lib/rancher/k3s/server/db/etcd &
+        echo $! > save_pid.txt
+
+        # delete traefik service so that no load-balancer is accidently changed
+        etcdctl del /registry/services/specs/traefik/traefik
+        etcdctl del /registry/services/endpoints/traefik/traefik
+
+        # delete old nodes (they interfere with load balancer)
+        # minions is the old name for "nodes"
+        OLD_NODES=$(etcdctl get "" --prefix --keys-only | grep /registry/minions/ | cut -c 19-)
+        for NODE in $OLD_NODES; do
+          for KEY in $(etcdctl get "" --prefix --keys-only | grep $NODE); do
+            etcdctl del $KEY
+          done
+        done
+
+        kill -9 `cat save_pid.txt`
+        rm save_pid.txt
+      else
+        echo this is not the first control plane node > /tmp/restorenotes
+      fi
+      EOF
+    )
+  ]
+  # ...
+}
+```
+
+2. Set the following sensible environment variables
+
+   - `export TF_VAR_k3s_token="..."` (Be careful, this token is like an admin password to the entire cluster. You need to use the same k3s_token which you saved when creating the backup.)
+   - `export etcd_s3_secret_key="..."`
+
+3. Create the cluster as usual. You can also change the cluster-name and deploy it next to the original backed up cluster.
+
+Awesome! You restored a whole cluster from a backup.
+
+</details>
+<details>
+<summary>Deploy in a pre-constructed private network (for proxies etc)</summary>
+If you want to deploy other machines on the private network before deploying the k3s cluster,
+you can. One use-case is if you want to setup a proxy or a NAT router on the private network,
+which is needed by the k3s cluster already at the time of construction.
+
+It is important to get all the address ranges right in this case, although the
+number of changes needed is minimal. If your network is created with 10.0.0.0/8,
+and you use subnet 10.128.0.0/9 for your non-k3s business, then adapting
+`network_ipv4_cidr = "10.0.0.0/9"` should be all you need.
+
+For example
+
+```
+resource "hcloud_network" "k3s_proxied" {
+  name     = "k3s-proxied"
+  ip_range = "10.0.0.0/8"
+}
+
+resource "hcloud_network_subnet" "k3s_proxy" {
+  network_id   = hcloud_network.k3s_proxied.id
+  type         = "cloud"
+  network_zone = "eu-central"
+  ip_range     = "10.128.0.0/9"
+}
+resource "hcloud_server" "your_proxy_server" {
+  ...
+}
+resource "hcloud_server_network" "your_proxy_server" {
+  depends_on = [
+    hcloud_server.your_proxy_server
+  ]
+  server_id  = hcloud_server.your_proxy_server.id
+  network_id = hcloud_network.k3s_proxied.id
+  ip         = "10.128.0.1"
+}
+module "kube-hetzner" {
+  ...
+  existing_network_id = [hcloud_network.k3s_proxied.id]
+  network_ipv4_cidr = "10.0.0.0/9"
+  additional_k3s_environment = {
+    "http_proxy" : "http://10.128.0.1:3128",
+    "HTTP_PROXY" : "http://10.128.0.1:3128",
+    "HTTPS_PROXY" : "http://10.128.0.1:3128",
+    "CONTAINERD_HTTP_PROXY" : "http://10.128.0.1:3128",
+    "CONTAINERD_HTTPS_PROXY" : "http://10.128.0.1:3128",
+    "NO_PROXY" : "127.0.0.0/8,10.0.0.0/8,",
+  }
+}
+```
+
+NOTE: square brackets in existing_network_id! This must be a list of length 1.
+
+</details>
+
 ## Debugging
 
 First and foremost, it depends, but it's always good to have a quick look into Hetzner quickly without logging in to the UI. That is where the `hcloud` cli comes in.
@@ -517,16 +861,17 @@ First and foremost, it depends, but it's always good to have a quick look into H
 - Activate it with `hcloud context create Kube-hetzner`; it will prompt for your Hetzner API token, paste that, and hit `enter`.
 - To check the nodes, if they are running, use `hcloud server list`.
 - To check the network, use `hcloud network describe k3s`.
-- To look at the LB, use `hcloud loadbalancer describe traefik`.
+- To look at the LB, use `hcloud loadbalancer describe k3s-traefik`.
 
 Then for the rest, you'll often need to log in to your cluster via ssh, to do that, use:
 
 ```sh
-ssh root@xxx.xxx.xxx.xxx -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no
-
+ssh root@<control-plane-ip> -i /path/to/private_key -o StrictHostKeyChecking=no
 ```
 
 Then, for control-plane nodes, use `journalctl -u k3s` to see the k3s logs, and for agents, use `journalctl -u k3s-agent` instead.
+
+Inspect the value of the k3s config.yaml file with: `cat /etc/rancher/k3s/config.yaml`, see if it looks kosher.
 
 Last but not least, to see when the previous reboot took place, you can use both `last reboot` and `uptime`.
 
@@ -538,20 +883,31 @@ If you want to take down the cluster, you can proceed as follows:
 terraform destroy -auto-approve
 ```
 
-And if the network is slow to delete, just issue `hcloud load-balancer delete clustername` in another terminal tab! As the load-balancer is a resource requested to the CCM by the ingress controller, and not deployed by Terraform itself.
+If you see the destroy hanging, it's probably because of the Hetzner LB and the autoscaled nodes. You can use the following command to delete everything (dry run option is available don't worry, and it will only delete resources specific to your cluster):
 
-The same thing for autoscaled nodes, if you have any, you can delete them with `hcloud server delete nodename` (run `hcloud server list` before to get the names).
-In that latter case, if terraform gives you an error that the firewall was not deleted correctly, just re-run `terraform destroy -auto-approve` again.
+```sh
+tmp_script=$(mktemp) && curl -sSL -o "${tmp_script}" https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/master/scripts/cleanup.sh && chmod +x "${tmp_script}" && "${tmp_script}" && rm "${tmp_script}"
+```
 
-_Also, if you had a full-blown cluster in use, it would be best to delete the whole project in your Hetzner account directly as operators or deployments may create other resources (like volumes) during regular operation._
+As a one time thing, for convenience, you can also save it as an alias in your shell config file, like so:
+
+```sh
+alias cleanupkh='tmp_script=$(mktemp) && curl -sSL -o "${tmp_script}" https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/master/scripts/cleanup.sh && chmod +x "${tmp_script}" && "${tmp_script}" && rm "${tmp_script}"'
+```
+
+_Careful, the above commands will delete everything, including volumes in your projects. You can always try with a dry run, it will give you that option._
+
+## Upgrading the Module
+
+Usually, you will want to upgrade the module in your project to the latest version. Just change the version attribute in your kube.tf and terraform apply. This will upgrade the module to the latest version.
+
+When moving from 1.x to 2.x:
+
+- Within your project folder, run the `createkh` installation command, see [Do Not Skip](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner#-do-not-skip-creating-your-kubetf-file-and-the-opensuse-microos-snapshot) section above. This will create the snapshot for you. Don't worry, it's non-destructive and will leave your kube.tf and terraform state alone, but will download the required other packer file.
+- Then modify your kube.tf to use version >= 2.0, and remove `extra_packages_to_install` and `opensuse_microos_mirror_link` variables if used. This functionality has been moved to the packer snapshot definition, see [packer-template/hcloud-microos-snapshots.pkr.hlc](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/blob/master/packer-template/hcloud-microos-snapshots.pkr.hcl).
+- Then run `terraform init -upgrade && terraform apply`.
 
 <!-- CONTRIBUTING -->
-
-## History
-
-This project has tried two other OS flavors before settling on MicroOS. Fedora Server, and k3OS. The latter, k3OS, is now defunct! However, our code base for it lives on in the [k3os branch](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/tree/k3os). Do not hesitate to check it out, it should still work.
-
-There is also a branch where openSUSE MicroOS came preinstalled with the k3s RPM from devel:kubic/k3s, but we moved away from that solution as the k3s version was rarely getting updates. See the [microOS-k3s-rpm](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/tree/microOS-k3s-rpm) branch for more.
 
 ## Contributing
 
@@ -561,6 +917,21 @@ Code contributions are very much **welcome**.
 
 1. Fork the Project
 1. Create your Branch (`git checkout -b AmazingFeature`)
+1. Develop your feature
+
+   In your kube.tf, point the `source` of module to your local clone of the repo.
+
+   Useful commands:
+
+   ```sh
+   # To cleanup a Hetzner project
+   ../kube-hetzner/scripts/cleanup.sh
+
+   # To build the Packer image
+   packer build ../kube-hetzner/packer-template/hcloud-microos-snapshots.pkr.hcl
+   ```
+
+1. Update examples in `kube.tf.example` if required.
 1. Commit your Changes (`git commit -m 'Add some AmazingFeature')
 1. Push to the Branch (`git push origin AmazingFeature`)
 1. Open a Pull Request targeting the `staging` branch.
@@ -576,14 +947,6 @@ Code contributions are very much **welcome**.
 - [Rancher](https://www.rancher.com) for k3s, an amazing Kube distribution that is the core engine of this project.
 - [openSUSE](https://www.opensuse.org) for MicroOS, which is just next-level Container OS technology.
 
-[contributors-shield]: https://img.shields.io/github/contributors/mysticaltech/kube-hetzner.svg?style=for-the-badge
-[contributors-url]: https://github.com/mysticaltech/kube-hetzner/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/mysticaltech/kube-hetzner.svg?style=for-the-badge
-[forks-url]: https://github.com/mysticaltech/kube-hetzner/network/members
-[stars-shield]: https://img.shields.io/github/stars/mysticaltech/kube-hetzner.svg?style=for-the-badge
-[stars-url]: https://github.com/mysticaltech/kube-hetzner/stargazers
-[issues-shield]: https://img.shields.io/github/issues/mysticaltech/kube-hetzner.svg?style=for-the-badge
-[issues-url]: https://github.com/mysticaltech/kube-hetzner/issues
-[license-shield]: https://img.shields.io/github/license/mysticaltech/kube-hetzner.svg?style=for-the-badge
-[license-url]: https://github.com/mysticaltech/kube-hetzner/blob/master/LICENSE.txt
+<!-- MARKDOWN LINKS & IMAGES -->
+
 [product-screenshot]: https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/raw/master/.images/kubectl-pod-all-17022022.png

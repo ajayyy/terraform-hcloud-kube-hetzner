@@ -2,6 +2,24 @@ variable "hcloud_token" {
   description = "Hetzner Cloud API Token."
   type        = string
   sensitive   = true
+}
+
+variable "k3s_token" {
+  description = "k3s master token (must match when restoring a cluster)."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "microos_x86_snapshot_id" {
+  description = "MicroOS x86 snapshot ID to be used. Per default empty, the most recent image created using createkh will be used"
+  type        = string
+  default     = ""
+}
+
+variable "microos_arm_snapshot_id" {
+  description = "MicroOS ARM snapshot ID to be used. Per default empty, the most recent image created using createkh will be used"
+  type        = string
   default     = ""
 }
 
@@ -45,12 +63,33 @@ variable "hcloud_ssh_key_id" {
   default     = null
 }
 
+variable "ssh_max_auth_tries" {
+  description = "The maximum number of authentication attempts permitted per connection."
+  type        = number
+  default     = 2
+}
+
 variable "network_region" {
   description = "Default region for network."
   type        = string
   default     = "eu-central"
 }
-
+variable "existing_network_id" {
+  # Unfortunately, we need this to be a list or null. If we only use a plain
+  # string here, and check that existing_network_id is null, terraform will
+  # complain that it cannot set `count` variables based on existing_network_id
+  # != null, because that id is an output value from
+  # hcloud_network.your_network.id, which terraform will only know after its
+  # construction.
+  description = "If you want to create the private network before calling this module, you can do so and pass its id here. NOTE: make sure to adapt network_ipv4_cidr accordingly to a range which does not collide with your other nodes."
+  type        = list(string)
+  default     = []
+  nullable    = false
+  validation {
+    condition     = length(var.existing_network_id) == 0 || (can(var.existing_network_id[0]) && length(var.existing_network_id) == 1)
+    error_message = "If you pass an existing_network_id, it must be enclosed in square brackets: [id]. This is necessary to be able to unambiguously distinguish between an empty network id (default) and a user-supplied network id."
+  }
+}
 variable "network_ipv4_cidr" {
   description = "The main network cidr that all subnets will be created upon."
   type        = string
@@ -58,9 +97,21 @@ variable "network_ipv4_cidr" {
 }
 
 variable "cluster_ipv4_cidr" {
-  description = "Internal Pod CIDR, used for the controller and currently for calico."
+  description = "Internal Pod CIDR, used for the controller and currently for calico/cilium."
   type        = string
   default     = "10.42.0.0/16"
+}
+
+variable "service_ipv4_cidr" {
+  description = "Internal Service CIDR, used for the controller and currently for calico/cilium."
+  type        = string
+  default     = "10.43.0.0/16"
+}
+
+variable "cluster_dns_ipv4" {
+  description = "Internal Service IPv4 address of core-dns."
+  type        = string
+  default     = "10.43.0.10"
 }
 
 variable "load_balancer_location" {
@@ -76,50 +127,141 @@ variable "load_balancer_type" {
 }
 
 variable "load_balancer_disable_ipv6" {
-  description = "Disable ipv6 for the load balancer."
+  description = "Disable IPv6 for the load balancer."
   type        = bool
   default     = false
+}
+
+variable "load_balancer_disable_public_network" {
+  description = "Disables the public network of the load balancer."
+  type        = bool
+  default     = false
+}
+
+variable "load_balancer_algorithm_type" {
+  description = "Specifies the algorithm type of the load balancer."
+  type        = string
+  default     = "round_robin"
+}
+
+variable "load_balancer_health_check_interval" {
+  description = "Specifies the interval at which a health check is performed. Minimum is 3s."
+  type        = string
+  default     = "15s"
+}
+
+variable "load_balancer_health_check_timeout" {
+  description = "Specifies the timeout of a single health check. Must not be greater than the health check interval. Minimum is 1s."
+  type        = string
+  default     = "10s"
+}
+
+variable "load_balancer_health_check_retries" {
+  description = "Specifies the number of times a health check is retried before a target is marked as unhealthy."
+  type        = number
+  default     = 3
 }
 
 variable "control_plane_nodepools" {
   description = "Number of control plane nodes."
   type = list(object({
-    name        = string
-    server_type = string
-    location    = string
-    backups     = optional(bool)
-    labels      = list(string)
-    taints      = list(string)
-    count       = number
+    name         = string
+    server_type  = string
+    location     = string
+    backups      = optional(bool)
+    labels       = list(string)
+    taints       = list(string)
+    count        = number
+    swap_size    = optional(string, "")
+    zram_size    = optional(string, "")
+    kubelet_args = optional(list(string), ["kube-reserved=cpu=250m,memory=1500Mi,ephemeral-storage=1Gi", "system-reserved=cpu=250m,memory=300Mi"])
   }))
   default = []
+  validation {
+    condition = length(
+      [for control_plane_nodepool in var.control_plane_nodepools : control_plane_nodepool.name]
+      ) == length(
+      distinct(
+        [for control_plane_nodepool in var.control_plane_nodepools : control_plane_nodepool.name]
+      )
+    )
+    error_message = "Names in control_plane_nodepools must be unique."
+  }
 }
 
 variable "agent_nodepools" {
   description = "Number of agent nodes."
   type = list(object({
-    name        = string
-    server_type = string
-    location    = string
-    backups     = optional(bool)
-    floating_ip = optional(bool)
-    labels      = list(string)
-    taints      = list(string)
-    count       = number
+    name                 = string
+    server_type          = string
+    location             = string
+    backups              = optional(bool)
+    floating_ip          = optional(bool)
+    labels               = list(string)
+    taints               = list(string)
+    count                = number
+    longhorn_volume_size = optional(number)
+    swap_size            = optional(string, "")
+    zram_size            = optional(string, "")
+    kubelet_args         = optional(list(string), ["kube-reserved=cpu=50m,memory=300Mi,ephemeral-storage=1Gi", "system-reserved=cpu=250m,memory=300Mi"])
   }))
   default = []
+  validation {
+    condition = length(
+      [for agent_nodepool in var.agent_nodepools : agent_nodepool.name]
+      ) == length(
+      distinct(
+        [for agent_nodepool in var.agent_nodepools : agent_nodepool.name]
+      )
+    )
+    error_message = "Names in agent_nodepools must be unique."
+  }
 }
 
 variable "cluster_autoscaler_image" {
   type        = string
-  default     = "registry.k8s.io/autoscaling/cluster-autoscaler"
+  default     = "ghcr.io/kube-hetzner/autoscaler/cluster-autoscaler"
   description = "Image of Kubernetes Cluster Autoscaler for Hetzner Cloud to be used."
 }
 
 variable "cluster_autoscaler_version" {
   type        = string
-  default     = "v1.25.0"
+  default     = "20231027"
   description = "Version of Kubernetes Cluster Autoscaler for Hetzner Cloud. Should be aligned with Kubernetes version"
+}
+
+variable "cluster_autoscaler_log_level" {
+  description = "Verbosity level of the logs for cluster-autoscaler"
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.cluster_autoscaler_log_level >= 0 && var.cluster_autoscaler_log_level <= 5
+    error_message = "The log level must be between 0 and 5."
+  }
+}
+
+variable "cluster_autoscaler_log_to_stderr" {
+  description = "Determines whether to log to stderr or not"
+  type        = bool
+  default     = true
+}
+
+variable "cluster_autoscaler_stderr_threshold" {
+  description = "Severity level above which logs are sent to stderr instead of stdout"
+  type        = string
+  default     = "INFO"
+
+  validation {
+    condition     = var.cluster_autoscaler_stderr_threshold == "INFO" || var.cluster_autoscaler_stderr_threshold == "WARNING" || var.cluster_autoscaler_stderr_threshold == "ERROR" || var.cluster_autoscaler_stderr_threshold == "FATAL"
+    error_message = "The stderr threshold must be one of the following: INFO, WARNING, ERROR, FATAL."
+  }
+}
+
+variable "cluster_autoscaler_extra_args" {
+  type        = list(string)
+  default     = []
+  description = "Extra arguments for the Cluster Autoscaler deployment."
 }
 
 variable "autoscaler_nodepools" {
@@ -130,8 +272,26 @@ variable "autoscaler_nodepools" {
     location    = string
     min_nodes   = number
     max_nodes   = number
+    labels      = optional(map(string), {})
+    taints = optional(list(object({
+      key    = string
+      value  = string
+      effect = string
+    })), [])
   }))
   default = []
+}
+
+variable "autoscaler_labels" {
+  description = "Labels for nodes created by the Cluster Autoscaler."
+  type        = list(string)
+  default     = []
+}
+
+variable "autoscaler_taints" {
+  description = "Taints for nodes created by the Cluster Autoscaler."
+  type        = list(string)
+  default     = []
 }
 
 variable "hetzner_ccm_version" {
@@ -187,10 +347,55 @@ variable "ingress_replica_count" {
   }
 }
 
+variable "ingress_max_replica_count" {
+  type        = number
+  default     = 10
+  description = "Number of maximum replicas per ingress controller. Used for ingress HPA. Must be higher than number of replicas."
+
+  validation {
+    condition     = var.ingress_max_replica_count >= 0
+    error_message = "Number of ingress maximum replicas can't be below 0."
+  }
+}
+
+variable "traefik_image_tag" {
+  type        = string
+  default     = ""
+  description = "Traefik image tag. Useful to use the beta version for new features. Example: v3.0.0-beta5"
+}
+
+variable "traefik_autoscaling" {
+  type        = bool
+  default     = true
+  description = "Should traefik enable Horizontal Pod Autoscaler."
+}
+
 variable "traefik_redirect_to_https" {
   type        = bool
   default     = true
   description = "Should traefik redirect http traffic to https."
+}
+
+variable "traefik_pod_disruption_budget" {
+  type        = bool
+  default     = true
+  description = "Should traefik enable pod disruption budget. Default values are maxUnavailable: 33% and minAvailable: 1."
+}
+
+variable "traefik_resource_limits" {
+  type        = bool
+  default     = true
+  description = "Should traefik enable default resource requests and limits. Default values are requests: 100m & 50Mi and limits: 300m & 150Mi."
+}
+
+variable "traefik_additional_ports" {
+  type = list(object({
+    name        = string
+    port        = number
+    exposedPort = number
+  }))
+  default     = []
+  description = "Additional ports to pass to Traefik. These are the ones that go into the ports section of the Traefik helm values file."
 }
 
 variable "traefik_additional_options" {
@@ -199,10 +404,28 @@ variable "traefik_additional_options" {
   description = "Additional options to pass to Traefik as a list of strings. These are the ones that go into the additionalArguments section of the Traefik helm values file."
 }
 
+variable "traefik_additional_trusted_ips" {
+  type        = list(string)
+  default     = []
+  description = "Additional Trusted IPs to pass to Traefik. These are the ones that go into the trustedIPs section of the Traefik helm values file."
+}
+
+variable "traefik_version" {
+  type        = string
+  default     = ""
+  description = "Version of Traefik helm chart."
+}
+
 variable "traefik_values" {
   type        = string
   default     = ""
   description = "Additional helm values file to pass to Traefik as 'valuesContent' at the HelmChart."
+}
+
+variable "nginx_version" {
+  type        = string
+  default     = ""
+  description = "Version of Nginx helm chart."
 }
 
 variable "nginx_values" {
@@ -220,17 +443,17 @@ variable "allow_scheduling_on_control_plane" {
 variable "enable_metrics_server" {
   type        = bool
   default     = true
-  description = "Whether to enable or disbale k3s mertric server."
+  description = "Whether to enable or disable k3s metric server."
 }
 
 variable "initial_k3s_channel" {
   type        = string
-  default     = "v1.25"
+  default     = "v1.28"
   description = "Allows you to specify an initial k3s channel."
 
   validation {
-    condition     = contains(["stable", "latest", "testing", "v1.16", "v1.17", "v1.18", "v1.19", "v1.20", "v1.21", "v1.22", "v1.23", "v1.24", "v1.25", "v1.26"], var.initial_k3s_channel)
-    error_message = "The initial k3s channel must be one of stable, latest or testing, or any of the minor kube versions like v1.22."
+    condition     = contains(["stable", "latest", "testing", "v1.16", "v1.17", "v1.18", "v1.19", "v1.20", "v1.21", "v1.22", "v1.23", "v1.24", "v1.25", "v1.26", "v1.27", "v1.28", "v1.29", "v1.30", "v1.31", "v1.32", "v1.33"], var.initial_k3s_channel)
+    error_message = "The initial k3s channel must be one of stable, latest or testing, or any of the minor kube versions like v1.26."
   }
 }
 
@@ -250,6 +473,18 @@ variable "extra_firewall_rules" {
   type        = list(any)
   default     = []
   description = "Additional firewall rules to apply to the cluster."
+}
+
+variable "firewall_kube_api_source" {
+  type        = list(string)
+  default     = ["0.0.0.0/0", "::/0"]
+  description = "Source networks that have Kube API access to the servers."
+}
+
+variable "firewall_ssh_source" {
+  type        = list(string)
+  default     = ["0.0.0.0/0", "::/0"]
+  description = "Source networks that have SSH access to the servers."
 }
 
 variable "use_cluster_name_in_node_name" {
@@ -303,10 +538,39 @@ variable "cni_plugin" {
   }
 }
 
+variable "cilium_egress_gateway_enabled" {
+  type        = bool
+  default     = false
+  description = "Enables egress gateway to redirect and SNAT the traffic that leaves the cluster."
+}
+
+variable "cilium_ipv4_native_routing_cidr" {
+  type        = string
+  default     = null
+  description = "Used when Cilium is configured in native routing mode. The CNI assumes that the underlying network stack will forward packets to this destination without the need to apply SNAT. Default: value of \"cluster_ipv4_cidr\""
+}
+
+variable "cilium_routing_mode" {
+  type        = string
+  default     = "tunnel"
+  description = "Set native-routing mode (\"native\") or tunneling mode (\"tunnel\")."
+
+  validation {
+    condition     = contains(["tunnel", "native"], var.cilium_routing_mode)
+    error_message = "The cilium_routing_mode must be one of \"tunnel\" or \"native\"."
+  }
+}
+
 variable "cilium_values" {
   type        = string
   default     = ""
   description = "Additional helm values file to pass to Cilium as 'valuesContent' at the HelmChart."
+}
+
+variable "cilium_version" {
+  type        = string
+  default     = "1.14.4"
+  description = "Version of Cilium."
 }
 
 variable "calico_values" {
@@ -320,16 +584,19 @@ variable "enable_longhorn" {
   default     = false
   description = "Whether or not to enable Longhorn."
 }
+
 variable "longhorn_repository" {
   type        = string
   default     = "https://charts.longhorn.io"
   description = "By default the official chart which may be incompatible with rancher is used. If you need to fully support rancher switch to https://charts.rancher.io."
 }
+
 variable "longhorn_namespace" {
   type        = string
   default     = "longhorn-system"
   description = "Namespace for longhorn deployment, defaults to 'longhorn-system'"
 }
+
 variable "longhorn_fstype" {
   type        = string
   default     = "ext4"
@@ -362,6 +629,18 @@ variable "disable_hetzner_csi" {
   type        = bool
   default     = false
   description = "Disable hetzner csi driver."
+}
+
+variable "enable_csi_driver_smb" {
+  type        = bool
+  default     = false
+  description = "Whether or not to enable csi-driver-smb."
+}
+
+variable "csi_driver_smb_values" {
+  type        = string
+  default     = ""
+  description = "Additional helm values file to pass to csi-driver-smb as 'valuesContent' at the HelmChart."
 }
 
 variable "enable_cert_manager" {
@@ -463,10 +742,38 @@ variable "use_control_plane_lb" {
   description = "When this is enabled, rather than the first node, all external traffic will be routed via a control-plane loadbalancer, allowing for high availability."
 }
 
+variable "control_plane_lb_type" {
+  type        = string
+  default     = "lb11"
+  description = "The type of load balancer to use for the control plane load balancer. Defaults to lb11, which is the cheapest one."
+}
+
+variable "control_plane_lb_enable_public_interface" {
+  type        = bool
+  default     = true
+  description = "Enable or disable public interface for the control plane load balancer . Defaults to true."
+}
+
 variable "dns_servers" {
-  type        = list(string)
-  default     = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1"]
-  description = "IP Addresses to use for the DNS Servers, set to an empty list to use the ones provided by Hetzner."
+  type = list(string)
+
+  default = [
+    "185.12.64.1",
+    "185.12.64.2",
+    "2a01:4ff:ff00::add:1",
+  ]
+  description = "IP Addresses to use for the DNS Servers, set to an empty list to use the ones provided by Hetzner. The length is limited to 3 entries, more entries is not supported by kubernetes"
+
+  validation {
+    condition     = length(var.dns_servers) <= 3
+    error_message = "The list must have no more than 3 items."
+  }
+}
+
+variable "address_for_connectivity_test" {
+  type        = string
+  default     = "1.1.1.1"
+  description = "Before installing k3s, we actually verify that there is internet connectivity. By default we ping 1.1.1.1, but if you use a proxy, you may simply want to ping that proxy instead (assuming that the proxy has its own checks for internet connectivity)."
 }
 
 variable "additional_k3s_environment" {
@@ -481,11 +788,17 @@ variable "preinstall_exec" {
   description = "Additional to execute before the install calls, for example fetching and installing certs."
 }
 
-
-variable "extra_packages_to_install" {
+variable "postinstall_exec" {
   type        = list(string)
   default     = []
-  description = "A list of additional packages to install on nodes."
+  description = "Additional to execute after the install calls, for example restoring a backup."
+}
+
+
+variable "extra_kustomize_deployment_commands" {
+  type        = string
+  default     = ""
+  description = "Commands to be executed after the `kubectl apply -k <dir>` step."
 }
 
 variable "extra_kustomize_parameters" {
@@ -506,6 +819,12 @@ variable "create_kustomization" {
   description = "Create the kustomization backup as a local file resource. Should be disabled for automatic runs."
 }
 
+variable "export_values" {
+  type        = bool
+  default     = false
+  description = "Export for deployment used values.yaml-files as local files."
+}
+
 variable "enable_wireguard" {
   type        = bool
   default     = false
@@ -513,7 +832,7 @@ variable "enable_wireguard" {
 }
 
 variable "control_planes_custom_config" {
-  type        = map(any)
+  type        = any
   default     = {}
   description = "Custom control plane configuration e.g to allow etcd monitoring."
 }
@@ -522,17 +841,6 @@ variable "k3s_registries" {
   description = "K3S registries.yml contents. It used to access private docker registries."
   default     = " "
   type        = string
-}
-
-variable "opensuse_microos_mirror_link" {
-  description = "The mirror link to use for the opensuse microos image."
-  default     = "https://mirror.dogado.de/opensuse/tumbleweed/appliances/openSUSE-MicroOS.x86_64-OpenStack-Cloud.qcow2"
-  type        = string
-
-  validation {
-    condition     = can(regex("^https.*openSUSE-MicroOS\\.x86_64[\\-0-9\\.]*-OpenStack-Cloud.*\\.qcow2$", var.opensuse_microos_mirror_link))
-    error_message = "You need to use a mirror link from https://download.opensuse.org/tumbleweed/appliances/openSUSE-MicroOS.x86_64-OpenStack-Cloud.qcow2.mirrorlist"
-  }
 }
 
 variable "additional_tls_sans" {
@@ -545,4 +853,46 @@ variable "calico_version" {
   type        = string
   default     = null
   description = "Version of Calico."
+}
+
+variable "k3s_exec_server_args" {
+  type        = string
+  default     = ""
+  description = "The control plane is started with `k3s server {k3s_exec_server_args}`. Use this to add kube-apiserver-arg for example."
+}
+
+variable "k3s_exec_agent_args" {
+  type        = string
+  default     = ""
+  description = "Agents nodes are started with `k3s agent {k3s_exec_agent_args}`. Use this to add kubelet-arg for example."
+}
+
+variable "k3s_global_kubelet_args" {
+  type        = list(string)
+  default     = []
+  description = "Global kubelet args for all nodes."
+}
+
+variable "k3s_control_plane_kubelet_args" {
+  type        = list(string)
+  default     = []
+  description = "Kubelet args for control plane nodes."
+}
+
+variable "k3s_agent_kubelet_args" {
+  type        = list(string)
+  default     = []
+  description = "Kubelet args for agent nodes."
+}
+
+variable "ingress_target_namespace" {
+  type        = string
+  default     = ""
+  description = "The namespace to deploy the ingress controller to. Defaults to ingress name."
+}
+
+variable "enable_local_storage" {
+  type        = bool
+  default     = false
+  description = "Whether to enable or disable k3s local-storage."
 }

@@ -2,7 +2,11 @@ variable "name" {
   description = "Host name"
   type        = string
 }
-
+variable "microos_snapshot_id" {
+  description = "MicroOS snapshot ID to be used. Per default empty, an initial snapshot will be created"
+  type        = string
+  default     = ""
+}
 variable "base_domain" {
   description = "Base domain used for reverse dns"
   type        = string
@@ -105,7 +109,32 @@ variable "k3s_registries_update_script" {
   type    = string
 }
 
-variable "opensuse_microos_mirror_link" {
-  default = "https://download.opensuse.org/tumbleweed/appliances/openSUSE-MicroOS.x86_64-OpenStack-Cloud.qcow2"
+variable "cloudinit_write_files_common" {
+  default = ""
   type    = string
+}
+
+variable "cloudinit_runcmd_common" {
+  default = ""
+  type    = string
+}
+
+variable "swap_size" {
+  default = ""
+  type    = string
+
+  validation {
+    condition     = can(regex("^$|[1-9][0-9]{0,3}(G|M)$", var.swap_size))
+    error_message = "Invalid swap size. Examples: 512M, 1G"
+  }
+}
+
+variable "zram_size" {
+  default = ""
+  type    = string
+
+  validation {
+    condition     = can(regex("^$|[1-9][0-9]{0,3}(G|M)$", var.zram_size))
+    error_message = "Invalid zram size. Examples: 512M, 1G"
+  }
 }

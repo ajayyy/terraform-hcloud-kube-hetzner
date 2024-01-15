@@ -1,3 +1,24 @@
+resource "hcloud_load_balancer" "cluster" {
+  count = local.has_external_load_balancer ? 0 : 1
+  name  = local.load_balancer_name
+
+  load_balancer_type = var.load_balancer_type
+  location           = var.load_balancer_location
+  labels             = local.labels
+
+  algorithm {
+    type = var.load_balancer_algorithm_type
+  }
+
+  lifecycle {
+    ignore_changes = [
+      # Ignore changes to hcloud-ccm/service-uid label that is managed by the CCM.
+      labels["hcloud-ccm/service-uid"],
+    ]
+  }
+}
+
+
 resource "null_resource" "first_control_plane" {
   connection {
     user           = "root"
@@ -13,7 +34,7 @@ resource "null_resource" "first_control_plane" {
       merge(
         {
           node-name                   = module.control_planes[keys(module.control_planes)[0]].name
-          token                       = random_password.k3s_token.result
+          token                       = local.k3s_token
           cluster-init                = true
           disable-cloud-controller    = true
           disable                     = local.disable_extras
@@ -24,6 +45,10 @@ resource "null_resource" "first_control_plane" {
           advertise-address           = module.control_planes[keys(module.control_planes)[0]].private_ipv4_address
           node-taint                  = local.control_plane_nodes[keys(module.control_planes)[0]].taints
           node-label                  = local.control_plane_nodes[keys(module.control_planes)[0]].labels
+          selinux                     = true
+          cluster-cidr                = var.cluster_ipv4_cidr
+          service-cidr                = var.service_ipv4_cidr
+          cluster-dns                 = var.cluster_dns_ipv4
         },
         lookup(local.cni_k3s_settings, var.cni_plugin, {}),
         var.use_control_plane_lb ? {
@@ -47,10 +72,9 @@ resource "null_resource" "first_control_plane" {
   # Upon reboot start k3s and wait for it to be ready to receive commands
   provisioner "remote-exec" {
     inline = [
-      "/etc/cloud/rename_interface.sh",
       "systemctl start k3s",
-      # prepare the post_install directory
-      "mkdir -p /var/post_install",
+      # prepare the needed directories
+      "mkdir -p /var/post_install /var/user_kustomize",
       # wait for k3s to become ready
       <<-EOT
       timeout 120 bash <<EOF
@@ -94,19 +118,24 @@ resource "null_resource" "kustomization" {
       local.calico_values,
       local.cilium_values,
       local.longhorn_values,
+      local.csi_driver_smb_values,
       local.cert_manager_values,
       local.rancher_values
     ])
     # Redeploy when versions of addons need to be updated
     versions = join("\n", [
+      coalesce(var.initial_k3s_channel, "N/A"),
       coalesce(var.cluster_autoscaler_version, "N/A"),
       coalesce(var.hetzner_ccm_version, "N/A"),
       coalesce(var.hetzner_csi_version, "N/A"),
       coalesce(var.kured_version, "N/A"),
       coalesce(var.calico_version, "N/A"),
+      coalesce(var.cilium_version, "N/A"),
+      coalesce(var.traefik_version, "N/A"),
+      coalesce(var.nginx_version, "N/A"),
     ])
     options = join("\n", [
-      for option, value in var.kured_options : "${option}=${value}"
+      for option, value in local.kured_options : "${option}=${value}"
     ])
   }
 
@@ -120,35 +149,7 @@ resource "null_resource" "kustomization" {
 
   # Upload kustomization.yaml, containing Hetzner CSI & CSM, as well as kured.
   provisioner "file" {
-    content = yamlencode({
-      apiVersion = "kustomize.config.k8s.io/v1beta1"
-      kind       = "Kustomization"
-
-      resources = concat(
-        [
-          "https://github.com/hetznercloud/hcloud-cloud-controller-manager/releases/download/${local.ccm_version}/ccm-networks.yaml",
-          "https://github.com/weaveworks/kured/releases/download/${local.kured_version}/kured-${local.kured_version}-dockerhub.yaml",
-          "https://raw.githubusercontent.com/rancher/system-upgrade-controller/master/manifests/system-upgrade-controller.yaml",
-        ],
-        var.disable_hetzner_csi ? [] : [
-          "hcloud-csi.yml"
-        ],
-        lookup(local.ingress_controller_install_resources, local.ingress_controller, []),
-        lookup(local.cni_install_resources, var.cni_plugin, []),
-        var.enable_longhorn ? ["longhorn.yaml"] : [],
-        var.enable_cert_manager || var.enable_rancher ? ["cert_manager.yaml"] : [],
-        var.enable_rancher ? ["rancher.yaml"] : [],
-        var.rancher_registration_manifest_url != "" ? [var.rancher_registration_manifest_url] : []
-      ),
-      patchesStrategicMerge = concat(
-        [
-          file("${path.module}/kustomize/system-upgrade-controller.yaml"),
-          "kured.yaml",
-          "ccm.yaml",
-        ],
-        lookup(local.cni_install_resource_patches, var.cni_plugin, [])
-      )
-    })
+    content     = local.kustomization_backup_yaml
     destination = "/var/post_install/kustomization.yaml"
   }
 
@@ -157,7 +158,9 @@ resource "null_resource" "kustomization" {
     content = templatefile(
       "${path.module}/templates/traefik_ingress.yaml.tpl",
       {
-        values = indent(4, trimspace(local.traefik_values))
+        version          = var.traefik_version
+        values           = indent(4, trimspace(local.traefik_values))
+        target_namespace = local.ingress_controller_namespace
     })
     destination = "/var/post_install/traefik_ingress.yaml"
   }
@@ -167,7 +170,9 @@ resource "null_resource" "kustomization" {
     content = templatefile(
       "${path.module}/templates/nginx_ingress.yaml.tpl",
       {
-        values = indent(4, trimspace(local.nginx_values))
+        version          = var.nginx_version
+        values           = indent(4, trimspace(local.nginx_values))
+        target_namespace = local.ingress_controller_namespace
     })
     destination = "/var/post_install/nginx_ingress.yaml"
   }
@@ -200,7 +205,8 @@ resource "null_resource" "kustomization" {
     content = templatefile(
       "${path.module}/templates/cilium.yaml.tpl",
       {
-        values = indent(4, trimspace(local.cilium_values))
+        values  = indent(4, trimspace(local.cilium_values))
+        version = var.cilium_version
     })
     destination = "/var/post_install/cilium.yaml"
   }
@@ -225,6 +231,16 @@ resource "null_resource" "kustomization" {
         values              = indent(4, trimspace(local.longhorn_values))
     })
     destination = "/var/post_install/longhorn.yaml"
+  }
+
+  # Upload the csi-driver-smb config
+  provisioner "file" {
+    content = templatefile(
+      "${path.module}/templates/csi-driver-smb.yaml.tpl",
+      {
+        values = indent(4, trimspace(local.csi_driver_smb_values))
+    })
+    destination = "/var/post_install/csi-driver-smb.yaml"
   }
 
   # Upload the cert-manager config
@@ -262,9 +278,9 @@ resource "null_resource" "kustomization" {
   provisioner "remote-exec" {
     inline = [
       "set -ex",
-      "kubectl -n kube-system create secret generic hcloud --from-literal=token=${var.hcloud_token} --from-literal=network=${hcloud_network.k3s.name} --dry-run=client -o yaml | kubectl apply -f -",
+      "kubectl -n kube-system create secret generic hcloud --from-literal=token=${var.hcloud_token} --from-literal=network=${data.hcloud_network.k3s.name} --dry-run=client -o yaml | kubectl apply -f -",
       "kubectl -n kube-system create secret generic hcloud-csi --from-literal=token=${var.hcloud_token} --dry-run=client -o yaml | kubectl apply -f -",
-      "curl https://raw.githubusercontent.com/hetznercloud/csi-driver/${local.csi_version}/deploy/kubernetes/hcloud-csi.yml | sed -e 's|k8s.gcr.io|registry.k8s.io|g' > /var/post_install/hcloud-csi.yml"
+      local.csi_version != null ? "curl https://raw.githubusercontent.com/hetznercloud/csi-driver/${coalesce(local.csi_version, "v2.4.0")}/deploy/kubernetes/hcloud-csi.yml -o /var/post_install/hcloud-csi.yml" : "echo 'Skipping hetzner csi.'"
     ]
   }
 
@@ -286,7 +302,7 @@ resource "null_resource" "kustomization" {
       # Wait for k3s to become ready (we check one more time) because in some edge cases,
       # the cluster had become unvailable for a few seconds, at this very instant.
       <<-EOT
-      timeout 180 bash <<EOF
+      timeout 360 bash <<EOF
         until [[ "\$(kubectl get --raw='/readyz' 2> /dev/null)" == "ok" ]]; do
           echo "Waiting for the cluster to become ready..."
           sleep 2
@@ -300,14 +316,14 @@ resource "null_resource" "kustomization" {
         # Ready, set, go for the kustomization
         "kubectl apply -k /var/post_install",
         "echo 'Waiting for the system-upgrade-controller deployment to become available...'",
-        "kubectl -n system-upgrade wait --for=condition=available --timeout=180s deployment/system-upgrade-controller",
-        "sleep 5", # important as the system upgrade controller CRDs sometimes don't get ready right away, especially with Cilium.
+        "kubectl -n system-upgrade wait --for=condition=available --timeout=360s deployment/system-upgrade-controller",
+        "sleep 7", # important as the system upgrade controller CRDs sometimes don't get ready right away, especially with Cilium.
         "kubectl -n system-upgrade apply -f /var/post_install/plans.yaml"
       ],
       local.has_external_load_balancer ? [] : [
         <<-EOT
-      timeout 180 bash <<EOF
-      until [ -n "\$(kubectl get -n ${lookup(local.ingress_controller_namespace_names, local.ingress_controller)} service/${lookup(local.ingress_controller_service_names, local.ingress_controller)} --output=jsonpath='{.status.loadBalancer.ingress[0].${var.lb_hostname != "" ? "hostname" : "ip"}}' 2> /dev/null)" ]; do
+      timeout 360 bash <<EOF
+      until [ -n "\$(kubectl get -n ${local.ingress_controller_namespace} service/${lookup(local.ingress_controller_service_names, var.ingress_controller)} --output=jsonpath='{.status.loadBalancer.ingress[0].${var.lb_hostname != "" ? "hostname" : "ip"}}' 2> /dev/null)" ]; do
           echo "Waiting for load-balancer to get an IP..."
           sleep 2
       done
@@ -317,7 +333,8 @@ resource "null_resource" "kustomization" {
   }
 
   depends_on = [
-    null_resource.first_control_plane,
+    hcloud_load_balancer.cluster,
+    null_resource.control_planes,
     random_password.rancher_bootstrap,
     hcloud_volume.longhorn_volume
   ]

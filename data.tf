@@ -6,7 +6,7 @@ data "github_release" "hetzner_ccm" {
 }
 
 data "github_release" "hetzner_csi" {
-  count       = var.hetzner_csi_version == null ? 1 : 0
+  count       = var.hetzner_csi_version == null && !var.disable_hetzner_csi ? 1 : 0
   repository  = "csi-driver"
   owner       = "hetznercloud"
   retrieve_by = "latest"
@@ -16,24 +16,24 @@ data "github_release" "hetzner_csi" {
 data "github_release" "kured" {
   count       = var.kured_version == null ? 1 : 0
   repository  = "kured"
-  owner       = "weaveworks"
+  owner       = "kubereboot"
   retrieve_by = "latest"
 }
 
 // github_release for kured
 data "github_release" "calico" {
-  count       = var.calico_version == null ? 1 : 0
+  count       = var.calico_version == null && var.cni_plugin == "calico" ? 1 : 0
   repository  = "calico"
   owner       = "projectcalico"
   retrieve_by = "latest"
 }
 
-data "hcloud_load_balancer" "cluster" {
-  count = local.has_external_load_balancer ? 0 : 1
-  name  = var.cluster_name
+# data "hcloud_load_balancer" "cluster" {
+#   count = local.has_external_load_balancer ? 0 : 1
+#   name  = var.cluster_name
 
-  depends_on = [null_resource.kustomization]
-}
+#   depends_on = [null_resource.kustomization]
+# }
 
 data "hcloud_ssh_keys" "keys_by_selector" {
   count         = length(var.ssh_hcloud_key_label) > 0 ? 1 : 0

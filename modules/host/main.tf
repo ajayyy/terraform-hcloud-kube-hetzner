@@ -21,8 +21,7 @@ resource "random_string" "identity_file" {
 
 resource "hcloud_server" "server" {
   name               = local.name
-  image              = "ubuntu-20.04"
-  rescue             = "linux64"
+  image              = var.microos_snapshot_id
   server_type        = var.server_type
   location           = var.location
   ssh_keys           = var.ssh_keys
@@ -36,12 +35,11 @@ resource "hcloud_server" "server" {
   # Prevent destroying the whole cluster if the user changes
   # any of the attributes that force to recreate the servers.
   lifecycle {
-    create_before_destroy = true
-
     ignore_changes = [
       location,
       ssh_keys,
       user_data,
+      image,
     ]
   }
 
@@ -61,76 +59,12 @@ resource "hcloud_server" "server" {
     EOT
   }
 
-  # Install MicroOS
-  provisioner "remote-exec" {
-    connection {
-      user           = "root"
-      private_key    = var.ssh_private_key
-      agent_identity = local.ssh_agent_identity
-      host           = self.ipv4_address
-
-      # We cannot use different ports here as this runs inside Hetzner Rescue image and thus uses the
-      # standard 22 TCP port.
-      port = 22
-    }
-
-    inline = [
-      "set -ex",
-      "wget --timeout=5 --waitretry=5 --tries=5 --retry-connrefused --inet4-only ${var.opensuse_microos_mirror_link}",
-      "qemu-img convert -p -f qcow2 -O host_device $(ls -a | grep -ie '^opensuse.*microos.*qcow2$') /dev/sda",
-    ]
-  }
-
-  # Issue a reboot command.
-  provisioner "local-exec" {
-    command = <<-EOT
-      ssh ${local.ssh_args} -i /tmp/${random_string.identity_file.id} root@${self.ipv4_address} '(sleep 2; reboot)&'; sleep 3
-    EOT
-  }
-
   # Wait for MicroOS to reboot and be ready.
   provisioner "local-exec" {
     command = <<-EOT
       until ssh ${local.ssh_args} -i /tmp/${random_string.identity_file.id} -o ConnectTimeout=2 -p ${var.ssh_port} root@${self.ipv4_address} true 2> /dev/null
       do
-        echo "Waiting for MicroOS to reboot and become available..."
-        sleep 3
-      done
-    EOT
-  }
-
-  # Install k3s-selinux (compatible version) and open-iscsi
-  provisioner "remote-exec" {
-    connection {
-      user           = "root"
-      private_key    = var.ssh_private_key
-      agent_identity = local.ssh_agent_identity
-      host           = self.ipv4_address
-      port           = var.ssh_port
-    }
-
-    inline = [<<-EOT
-      set -ex
-      transactional-update shell <<< "zypper --no-gpg-checks --non-interactive install https://github.com/k3s-io/k3s-selinux/releases/download/v1.3.testing.4/k3s-selinux-1.3-4.sle.noarch.rpm"
-      transactional-update --continue shell <<< "zypper --gpg-auto-import-keys install -y ${local.needed_packages}"
-      sleep 1 && udevadm settle
-      EOT
-    ]
-  }
-
-  # Issue a reboot command.
-  provisioner "local-exec" {
-    command = <<-EOT
-      ssh ${local.ssh_args} -i /tmp/${random_string.identity_file.id} -p ${var.ssh_port} root@${self.ipv4_address} '(sleep 3; reboot)&'; sleep 3
-    EOT
-  }
-
-  # Wait for MicroOS to reboot and be ready
-  provisioner "local-exec" {
-    command = <<-EOT
-      until ssh ${local.ssh_args} -i /tmp/${random_string.identity_file.id} -o ConnectTimeout=2 -p ${var.ssh_port} root@${self.ipv4_address} true 2> /dev/null
-      do
-        echo "Waiting for MicroOS to reboot and become available..."
+        echo "Waiting for MicroOS to become available..."
         sleep 3
       done
     EOT
@@ -143,17 +77,6 @@ resource "hcloud_server" "server" {
     EOT
   }
 
-  # Enable open-iscsi
-  provisioner "remote-exec" {
-    inline = [
-      <<-EOT
-      set -ex
-      if [[ $(systemctl list-units --all -t service --full --no-legend "iscsid.service" | sed 's/^\s*//g' | cut -f1 -d' ') == iscsid.service ]]; then
-        systemctl enable --now iscsid
-      fi
-      EOT
-    ]
-  }
 
   provisioner "remote-exec" {
     inline = var.automatically_upgrade_os ? [
@@ -167,6 +90,7 @@ resource "hcloud_server" "server" {
       EOT
     ]
   }
+
 }
 
 resource "null_resource" "registries" {
@@ -217,14 +141,93 @@ data "cloudinit_config" "config" {
     filename     = "init.cfg"
     content_type = "text/cloud-config"
     content = templatefile(
-      "${path.module}/templates/userdata.yaml.tpl",
+      "${path.module}/templates/cloudinit.yaml.tpl",
       {
-        hostname          = local.name
-        sshPort           = var.ssh_port
-        sshAuthorizedKeys = concat([var.ssh_public_key], var.ssh_additional_public_keys)
-        dnsServers        = var.dns_servers
-        k3sRegistries     = var.k3s_registries
+        hostname                     = local.name
+        sshAuthorizedKeys            = concat([var.ssh_public_key], var.ssh_additional_public_keys)
+        cloudinit_write_files_common = var.cloudinit_write_files_common
+        cloudinit_runcmd_common      = var.cloudinit_runcmd_common
+        swap_size                    = var.swap_size
       }
     )
   }
+}
+
+resource "null_resource" "zram" {
+  triggers = {
+    zram_size = var.zram_size
+  }
+
+  connection {
+    user           = "root"
+    private_key    = var.ssh_private_key
+    agent_identity = local.ssh_agent_identity
+    host           = hcloud_server.server.ipv4_address
+    port           = var.ssh_port
+  }
+
+  provisioner "file" {
+    content     = <<-EOT
+#!/bin/bash
+
+# Switching off swap
+swapoff /dev/zram0
+
+rmmod zram
+    EOT
+    destination = "/usr/local/bin/k3s-swapoff"
+  }
+
+  provisioner "file" {
+    content     = <<-EOT
+#!/bin/bash
+
+# get the amount of memory in the machine
+# load the dependency module
+modprobe zram
+
+# initialize the device with zstd compression algorithm
+echo zstd > /sys/block/zram0/comp_algorithm;
+echo ${var.zram_size} > /sys/block/zram0/disksize
+
+# Creating the swap filesystem
+mkswap /dev/zram0
+
+# Switch the swaps on
+swapon -p 100 /dev/zram0
+    EOT
+    destination = "/usr/local/bin/k3s-swapon"
+  }
+
+  # Setup zram if it's enabled
+  provisioner "file" {
+    content     = <<-EOT
+[Unit]
+Description=Swap with zram
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/bin/k3s-swapon
+ExecStop=/usr/local/bin/k3s-swapoff
+
+[Install]
+WantedBy=multi-user.target
+    EOT
+    destination = "/etc/systemd/system/zram.service"
+  }
+
+  provisioner "remote-exec" {
+    inline = concat(var.zram_size != "" ? [
+      "chmod +x /usr/local/bin/k3s-swapon",
+      "chmod +x /usr/local/bin/k3s-swapoff",
+      "systemctl disable --now zram.service",
+      "systemctl enable --now zram.service",
+      ] : [
+      "systemctl disable --now zram.service",
+    ])
+  }
+
+  depends_on = [hcloud_server.server]
 }

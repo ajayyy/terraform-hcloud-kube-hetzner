@@ -1,7 +1,8 @@
+---
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: traefik
+  name: ${target_namespace}
 ---
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
@@ -10,8 +11,9 @@ metadata:
   namespace: kube-system
 spec:
   chart: traefik
+  version: "${version}"
   repo: https://traefik.github.io/charts
-  targetNamespace: traefik
+  targetNamespace: ${target_namespace}
   bootstrap: true
   valuesContent: |-
     ${values}

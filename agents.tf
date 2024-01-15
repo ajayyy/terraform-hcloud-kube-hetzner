@@ -8,6 +8,7 @@ module "agents" {
   for_each = local.agent_nodes
 
   name                         = "${var.use_cluster_name_in_node_name ? "${var.cluster_name}-" : ""}${each.value.nodepool_name}"
+  microos_snapshot_id          = substr(each.value.server_type, 0, 3) == "cax" ? data.hcloud_image.microos_arm_snapshot.id : data.hcloud_image.microos_x86_snapshot.id
   base_domain                  = var.base_domain
   ssh_keys                     = length(var.ssh_hcloud_key_label) > 0 ? concat([local.hcloud_ssh_key_id], data.hcloud_ssh_keys.keys_by_selector[0].ssh_keys.*.id) : [local.hcloud_ssh_key_id]
   ssh_port                     = var.ssh_port
@@ -15,16 +16,17 @@ module "agents" {
   ssh_private_key              = var.ssh_private_key
   ssh_additional_public_keys   = length(var.ssh_hcloud_key_label) > 0 ? concat(var.ssh_additional_public_keys, data.hcloud_ssh_keys.keys_by_selector[0].ssh_keys.*.public_key) : var.ssh_additional_public_keys
   firewall_ids                 = [hcloud_firewall.k3s.id]
-  placement_group_id           = var.placement_group_disable ? 0 : hcloud_placement_group.agent[floor(each.value.index / 10)].id
+  placement_group_id           = var.placement_group_disable ? null : hcloud_placement_group.agent[floor(index(keys(local.agent_nodes), each.key) / 10)].id
   location                     = each.value.location
   server_type                  = each.value.server_type
   backups                      = each.value.backups
   ipv4_subnet_id               = hcloud_network_subnet.agent[[for i, v in var.agent_nodepools : i if v.name == each.value.nodepool_name][0]].id
-  packages_to_install          = local.packages_to_install
   dns_servers                  = var.dns_servers
   k3s_registries               = var.k3s_registries
   k3s_registries_update_script = local.k3s_registries_update_script
-  opensuse_microos_mirror_link = var.opensuse_microos_mirror_link
+  cloudinit_write_files_common = local.cloudinit_write_files_common
+  cloudinit_runcmd_common      = local.cloudinit_runcmd_common
+  swap_size                    = each.value.swap_size
 
   private_ipv4 = cidrhost(hcloud_network_subnet.agent[[for i, v in var.agent_nodepools : i if v.name == each.value.nodepool_name][0]].ip_range, each.value.index + 101)
 
@@ -33,8 +35,52 @@ module "agents" {
   automatically_upgrade_os = var.automatically_upgrade_os
 
   depends_on = [
-    hcloud_network_subnet.agent
+    hcloud_network_subnet.agent,
+    hcloud_placement_group.agent
   ]
+}
+
+locals {
+  k3s-agent-config = { for k, v in local.agent_nodes : k => merge(
+    {
+      node-name     = module.agents[k].name
+      server        = "https://${var.use_control_plane_lb ? hcloud_load_balancer_network.control_plane.*.ip[0] : module.control_planes[keys(module.control_planes)[0]].private_ipv4_address}:6443"
+      token         = local.k3s_token
+      kubelet-arg   = concat(local.kubelet_arg, var.k3s_global_kubelet_args, var.k3s_agent_kubelet_args, v.kubelet_args)
+      flannel-iface = local.flannel_iface
+      node-ip       = module.agents[k].private_ipv4_address
+      node-label    = v.labels
+      node-taint    = v.taints
+      selinux       = true
+    },
+  ) }
+}
+
+resource "null_resource" "agent_config" {
+  for_each = local.agent_nodes
+
+  triggers = {
+    agent_id = module.agents[each.key].id
+    config   = sha1(yamlencode(local.k3s-agent-config[each.key]))
+  }
+
+  connection {
+    user           = "root"
+    private_key    = var.ssh_private_key
+    agent_identity = local.ssh_agent_identity
+    host           = module.agents[each.key].ipv4_address
+    port           = var.ssh_port
+  }
+
+  # Generating k3s agent config file
+  provisioner "file" {
+    content     = yamlencode(local.k3s-agent-config[each.key])
+    destination = "/tmp/config.yaml"
+  }
+
+  provisioner "remote-exec" {
+    inline = [local.k3s_config_update_script]
+  }
 }
 
 resource "null_resource" "agents" {
@@ -52,21 +98,6 @@ resource "null_resource" "agents" {
     port           = var.ssh_port
   }
 
-  # Generating k3s agent config file
-  provisioner "file" {
-    content = yamlencode({
-      node-name     = module.agents[each.key].name
-      server        = "https://${var.use_control_plane_lb ? hcloud_load_balancer_network.control_plane.*.ip[0] : module.control_planes[keys(module.control_planes)[0]].private_ipv4_address}:6443"
-      token         = random_password.k3s_token.result
-      kubelet-arg   = local.kubelet_arg
-      flannel-iface = local.flannel_iface
-      node-ip       = module.agents[each.key].private_ipv4_address
-      node-label    = each.value.labels
-      node-taint    = each.value.taints
-    })
-    destination = "/tmp/config.yaml"
-  }
-
   # Install k3s agent
   provisioner "remote-exec" {
     inline = local.install_k3s_agent
@@ -74,8 +105,7 @@ resource "null_resource" "agents" {
 
   # Start the k3s agent and wait for it to have started
   provisioner "remote-exec" {
-    inline = [
-      "/etc/cloud/rename_interface.sh",
+    inline = concat(var.enable_longhorn ? ["systemctl enable --now iscsid"] : [], [
       "systemctl start k3s-agent 2> /dev/null",
       <<-EOT
       timeout 120 bash <<EOF
@@ -86,17 +116,18 @@ resource "null_resource" "agents" {
         done
       EOF
       EOT
-    ]
+    ])
   }
 
   depends_on = [
     null_resource.first_control_plane,
+    null_resource.agent_config,
     hcloud_network_subnet.agent
   ]
 }
 
 resource "hcloud_volume" "longhorn_volume" {
-  for_each = { for k, v in local.agent_nodes : k => v if((lookup(v, "longhorn_volume_size", 0) >= 10) && (lookup(v, "longhorn_volume_size", 0) <= 10000) && var.enable_longhorn) }
+  for_each = { for k, v in local.agent_nodes : k => v if((v.longhorn_volume_size >= 10) && (v.longhorn_volume_size <= 10000) && var.enable_longhorn) }
 
   labels = {
     provisioner = "terraform"
@@ -104,14 +135,14 @@ resource "hcloud_volume" "longhorn_volume" {
     scope       = "longhorn"
   }
   name      = "${var.cluster_name}-longhorn-${module.agents[each.key].name}"
-  size      = lookup(local.agent_nodes[each.key], "longhorn_volume_size", 0)
+  size      = local.agent_nodes[each.key].longhorn_volume_size
   server_id = module.agents[each.key].id
   automount = true
   format    = var.longhorn_fstype
 }
 
 resource "null_resource" "configure_longhorn_volume" {
-  for_each = { for k, v in local.agent_nodes : k => v if((lookup(v, "longhorn_volume_size", 0) >= 10) && (lookup(v, "longhorn_volume_size", 0) <= 10000) && var.enable_longhorn) }
+  for_each = { for k, v in local.agent_nodes : k => v if((v.longhorn_volume_size >= 10) && (v.longhorn_volume_size <= 10000) && var.enable_longhorn) }
 
   triggers = {
     agent_id = module.agents[each.key].id
@@ -169,16 +200,20 @@ resource "null_resource" "configure_floating_ip" {
 
   provisioner "remote-exec" {
     inline = [
-      "echo \"BOOTPROTO='static'\nSTARTMODE='auto'\nIPADDR=${hcloud_floating_ip.agents[each.key].ip_address}/32\nIPADDR_1=${module.agents[each.key].ipv4_address}/32\" > /etc/sysconfig/network/ifcfg-eth0",
-      "echo \"172.31.1.1 - 255.255.255.255 eth0\ndefault 172.31.1.1 - eth0 src ${hcloud_floating_ip.agents[each.key].ip_address}\" > /etc/sysconfig/network/ifroute-eth0",
-
-      "ip addr add ${hcloud_floating_ip.agents[each.key].ip_address}/32 dev eth0",
-      "ip route replace default via 172.31.1.1 dev eth0 src ${hcloud_floating_ip.agents[each.key].ip_address}",
-
-      # its important: floating IP should be first on the interface IP list
-      # move main IP to the second position
-      "ip addr del ${module.agents[each.key].ipv4_address}/32 dev eth0",
-      "ip addr add ${module.agents[each.key].ipv4_address}/32 dev eth0",
+      # Reconfigure eth0:
+      #  - add floating_ip as first and other IP as second address
+      #  - add 172.31.1.1 as default gateway (In the Hetzner Cloud, the
+      #    special private IP address 172.31.1.1 is the default
+      #    gateway for the public network)
+      # The configuration is stored in file /etc/NetworkManager/system-connections/cloud-init-eth0.nmconnection
+      <<-EOT
+      NM_CONNECTION=$(nmcli -g GENERAL.CONNECTION device show eth0)
+      nmcli connection modify "$NM_CONNECTION" \
+        ipv4.method manual \
+        ipv4.addresses ${hcloud_floating_ip.agents[each.key].ip_address}/32,${module.agents[each.key].ipv4_address}/32 gw4 172.31.1.1 \
+        ipv4.route-metric 100 \
+      && nmcli connection up "$NM_CONNECTION"
+      EOT
     ]
   }
 
