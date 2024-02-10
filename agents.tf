@@ -108,11 +108,11 @@ resource "null_resource" "agents" {
     inline = concat(var.enable_longhorn ? ["systemctl enable --now iscsid"] : [], [
       "systemctl start k3s-agent 2> /dev/null",
       <<-EOT
-      timeout 120 bash <<EOF
+      timeout 1500 bash <<EOF
         until systemctl status k3s-agent > /dev/null; do
           systemctl start k3s-agent 2> /dev/null
           echo "Waiting for the k3s agent to start..."
-          sleep 2
+          sleep 5
         done
       EOF
       EOT

@@ -77,19 +77,19 @@ resource "null_resource" "first_control_plane" {
       "mkdir -p /var/post_install /var/user_kustomize",
       # wait for k3s to become ready
       <<-EOT
-      timeout 120 bash <<EOF
+      timeout 1500 bash <<EOF
         until systemctl status k3s > /dev/null; do
           systemctl start k3s
           echo "Waiting for the k3s server to start..."
-          sleep 2
+          sleep 5
         done
         until [ -e /etc/rancher/k3s/k3s.yaml ]; do
           echo "Waiting for kubectl config..."
-          sleep 2
+          sleep 5
         done
         until [[ "\$(kubectl get --raw='/readyz' 2> /dev/null)" == "ok" ]]; do
           echo "Waiting for the cluster to become ready..."
-          sleep 2
+          sleep 5
         done
       EOF
       EOT
