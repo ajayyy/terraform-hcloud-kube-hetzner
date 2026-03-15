@@ -254,3 +254,26 @@ resource "null_resource" "agent-update" {
     always_run = "${timestamp()}"
   }
 }
+
+# If cert on the controller got renewed, run this
+# resource "null_resource" "restart-k3s" {
+#   for_each = local.agent_nodes
+
+#   connection {
+#     user           = "root"
+#     private_key    = var.ssh_private_key
+#     agent_identity = local.ssh_agent_identity
+#     host           = module.agents[each.key].ipv4_address
+#     port           = var.ssh_port
+#   }
+
+#   provisioner "remote-exec" {
+#     inline = [
+#       "systemctl restart k3s-agent"
+#     ]
+#   }
+
+#   triggers = {
+#     always_run = "${timestamp()}"
+#   }
+# }
