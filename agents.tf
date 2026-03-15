@@ -254,26 +254,3 @@ resource "null_resource" "agent-update" {
     always_run = "${timestamp()}"
   }
 }
-
-resource "null_resource" "redis-agent-update" {
-  for_each = { for k, v in local.agent_nodes : k => v if contains(v.labels, "ram=8gb") }
-
-  connection {
-    user           = "root"
-    private_key    = var.ssh_private_key
-    agent_identity = local.ssh_agent_identity
-    host           = module.agents[each.key].ipv4_address
-    port           = var.ssh_port
-  }
-
-  provisioner "remote-exec" {
-    # madvise is better than never
-    inline = [
-      "echo madvise > /sys/kernel/mm/transparent_hugepage/enabled"
-    ]
-  }
-
-  triggers = {
-    always_run = "${timestamp()}"
-  }
-}
