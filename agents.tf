@@ -367,30 +367,30 @@ resource "terraform_data" "configure_floating_ip" {
   ]
 }
 
-resource "null_resource" "agent-update" {
-  for_each = local.agent_nodes
+# resource "null_resource" "agent-update" {
+#   for_each = local.agent_nodes
 
-  connection {
-    user           = "root"
-    private_key    = var.ssh_private_key
-    agent_identity = local.ssh_agent_identity
-    host           = module.agents[each.key].ipv4_address
-    port           = var.ssh_port
-  }
+#   connection {
+#     user           = "root"
+#     private_key    = var.ssh_private_key
+#     agent_identity = local.ssh_agent_identity
+#     host           = module.agents[each.key].ipv4_address
+#     port           = var.ssh_port
+#   }
 
-  provisioner "remote-exec" {
-    inline = [
-      "sysctl -w net.core.somaxconn=65535",
-      "sysctl -w net.ipv4.ip_local_port_range=\"1024 60999\"",
-      "sysctl -w net.ipv4.tcp_max_syn_backlog=4096",
-      "echo 'net.core.somaxconn=65535\nnet.ipv4.ip_local_port_range=1024 60999\nnet.ipv4.tcp_max_syn_backlog=4096' > /etc/sysctl.d/99-custom-conn-limits.conf"
-    ]
-  }
+#   provisioner "remote-exec" {
+#     inline = [
+#       "sysctl -w net.core.somaxconn=65535",
+#       "sysctl -w net.ipv4.ip_local_port_range=\"1024 60999\"",
+#       "sysctl -w net.ipv4.tcp_max_syn_backlog=4096",
+#       "echo 'net.core.somaxconn=65535\nnet.ipv4.ip_local_port_range=1024 60999\nnet.ipv4.tcp_max_syn_backlog=4096' > /etc/sysctl.d/99-custom-conn-limits.conf"
+#     ]
+#   }
 
-  triggers = {
-    always_run = "${timestamp()}"
-  }
-}
+#   triggers = {
+#     always_run = "${timestamp()}"
+#   }
+# }
 
 # If cert on the controller got renewed, run this
 # resource "null_resource" "restart-k3s" {
