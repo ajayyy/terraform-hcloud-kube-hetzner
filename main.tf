@@ -3,13 +3,41 @@ resource "random_password" "k3s_token" {
   special = false
 }
 
+locals {
+  microos_nodepool_server_types = concat(
+    [for node in values(local.control_plane_nodes) : node.server_type],
+    [for node in values(local.agent_nodes) : node.server_type],
+    [for nodepool in var.autoscaler_nodepools : nodepool.server_type],
+  )
+
+  uses_microos_arm_snapshot = length([
+    for server_type in local.microos_nodepool_server_types : server_type
+    if substr(server_type, 0, 3) == "cax"
+  ]) > 0
+
+  uses_microos_x86_snapshot = length([
+    for server_type in local.microos_nodepool_server_types : server_type
+    if substr(server_type, 0, 3) != "cax"
+  ]) > 0
+
+  microos_x86_snapshot_id = var.microos_x86_snapshot_id != "" ? var.microos_x86_snapshot_id : (
+    join("", data.hcloud_image.microos_x86_snapshot[*].id)
+  )
+
+  microos_arm_snapshot_id = var.microos_arm_snapshot_id != "" ? var.microos_arm_snapshot_id : (
+    join("", data.hcloud_image.microos_arm_snapshot[*].id)
+  )
+}
+
 data "hcloud_image" "microos_x86_snapshot" {
+  count             = var.microos_x86_snapshot_id == "" && local.uses_microos_x86_snapshot ? 1 : 0
   with_selector     = "microos-snapshot=yes"
   with_architecture = "x86"
   most_recent       = true
 }
 
 data "hcloud_image" "microos_arm_snapshot" {
+  count             = var.microos_arm_snapshot_id == "" && local.uses_microos_arm_snapshot ? 1 : 0
   with_selector     = "microos-snapshot=yes"
   with_architecture = "arm"
   most_recent       = true
@@ -18,20 +46,22 @@ data "hcloud_image" "microos_arm_snapshot" {
 resource "hcloud_ssh_key" "k3s" {
   count      = var.hcloud_ssh_key_id == null ? 1 : 0
   name       = var.cluster_name
-  public_key = var.ssh_public_key
+  public_key = local.ssh_public_key
   labels     = local.labels
 }
 
 resource "hcloud_network" "k3s" {
-  count    = local.use_existing_network ? 0 : 1
-  name     = var.cluster_name
-  ip_range = var.network_ipv4_cidr
-  labels   = local.labels
+  count                    = local.use_existing_network ? 0 : 1
+  name                     = var.cluster_name
+  ip_range                 = var.network_ipv4_cidr
+  labels                   = local.labels
+  expose_routes_to_vswitch = var.vswitch_id != null
 }
 
 data "hcloud_network" "k3s" {
   id = local.use_existing_network ? var.existing_network_id[0] : hcloud_network.k3s[0].id
 }
+
 
 # We start from the end of the subnets cidr array,
 # as we would have fewer control plane nodepools, than agent ones.
@@ -40,7 +70,7 @@ resource "hcloud_network_subnet" "control_plane" {
   network_id   = data.hcloud_network.k3s.id
   type         = "cloud"
   network_zone = var.network_region
-  ip_range     = local.network_ipv4_subnets[255 - count.index]
+  ip_range     = local.network_ipv4_subnets[var.subnet_amount - 1 - count.index]
 }
 
 # Here we start at the beginning of the subnets cidr array
@@ -49,7 +79,26 @@ resource "hcloud_network_subnet" "agent" {
   network_id   = data.hcloud_network.k3s.id
   type         = "cloud"
   network_zone = var.network_region
-  ip_range     = local.network_ipv4_subnets[count.index]
+  ip_range     = coalesce(var.agent_nodepools[count.index].subnet_ip_range, local.network_ipv4_subnets[count.index])
+}
+
+# Subnet for NAT router and other peripherals
+resource "hcloud_network_subnet" "nat_router" {
+  count        = var.nat_router != null ? 1 : 0
+  network_id   = data.hcloud_network.k3s.id
+  type         = "cloud"
+  network_zone = var.network_region
+  ip_range     = local.network_ipv4_subnets[var.nat_router_subnet_index]
+}
+
+# Subnet for vSwitch
+resource "hcloud_network_subnet" "vswitch_subnet" {
+  count        = var.vswitch_id != null ? 1 : 0
+  network_id   = data.hcloud_network.k3s.id
+  type         = "vswitch"
+  network_zone = var.network_region
+  ip_range     = local.network_ipv4_subnets[var.vswitch_subnet_index]
+  vswitch_id   = var.vswitch_id
 }
 
 resource "hcloud_firewall" "k3s" {
@@ -67,18 +116,4 @@ resource "hcloud_firewall" "k3s" {
       source_ips      = lookup(rule.value, "source_ips", [])
     }
   }
-}
-
-resource "hcloud_placement_group" "control_plane" {
-  count  = ceil(local.control_plane_count / 10)
-  name   = "${var.cluster_name}-control-plane-${count.index + 1}"
-  labels = local.labels
-  type   = "spread"
-}
-
-resource "hcloud_placement_group" "agent" {
-  count  = ceil(local.agent_count / 10)
-  name   = "${var.cluster_name}-agent-${count.index + 1}"
-  labels = local.labels
-  type   = "spread"
 }

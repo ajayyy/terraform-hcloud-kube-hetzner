@@ -9,11 +9,11 @@ spec:
     spec:
       containers:
         - name: hcloud-cloud-controller-manager
-          command:
-            - "/bin/hcloud-cloud-controller-manager"
+          args:
             - "--cloud-provider=hcloud"
             - "--leader-elect=false"
             - "--allow-untagged-cloud"
+            - "--route-reconciliation-period=30s"
             - "--allocate-node-cidrs=true"
             - "--cluster-cidr=${cluster_cidr_ipv4}"
             - "--webhook-secure-port=0"
@@ -27,3 +27,5 @@ spec:
               value: "true"
             - name: "HCLOUD_LOAD_BALANCERS_ENABLED"
               value: "${!using_klipper_lb}"
+            - name: "HCLOUD_LOAD_BALANCERS_DISABLE_PRIVATE_INGRESS"
+              value: "true"

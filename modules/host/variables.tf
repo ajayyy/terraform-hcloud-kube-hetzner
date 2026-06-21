@@ -109,6 +109,26 @@ variable "k3s_registries_update_script" {
   type    = string
 }
 
+variable "k3s_kubelet_config" {
+  default = ""
+  type    = string
+}
+
+variable "k3s_kubelet_config_update_script" {
+  default = ""
+  type    = string
+}
+
+variable "k3s_audit_policy_config" {
+  description = "K3S audit-policy.yaml contents"
+  type        = string
+}
+
+variable "k3s_audit_policy_update_script" {
+  description = "Script to update audit policy configuration"
+  type        = string
+}
+
 variable "cloudinit_write_files_common" {
   default = ""
   type    = string
@@ -137,4 +157,43 @@ variable "zram_size" {
     condition     = can(regex("^$|[1-9][0-9]{0,3}(G|M)$", var.zram_size))
     error_message = "Invalid zram size. Examples: 512M, 1G"
   }
+}
+
+variable "keep_disk_size" {
+  type        = bool
+  default     = false
+  description = "Whether to keep OS disks of nodes the same size when upgrading a node"
+}
+
+variable "disable_ipv4" {
+  type        = bool
+  default     = false
+  description = "Whether to disable ipv4 on the server. If you disable ipv4 and ipv6 make sure you have an access to your private network."
+}
+
+variable "disable_ipv6" {
+  type        = bool
+  default     = false
+  description = "Whether to disable ipv4 on the server. If you disable ipv4 and ipv6 make sure you have an access to your private network."
+}
+
+variable "network_id" {
+  type        = number
+  default     = null
+  description = "The network id to attach the server to."
+}
+
+variable "ssh_bastion" {
+  type = object({
+
+    bastion_host        = string
+    bastion_port        = number
+    bastion_user        = string
+    bastion_private_key = string
+  })
+}
+
+variable "network_gw_ipv4" {
+  type        = string
+  description = "Default IPv4 gateway address for the node's primary network interface"
 }

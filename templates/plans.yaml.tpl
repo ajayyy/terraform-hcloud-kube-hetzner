@@ -10,7 +10,11 @@ metadata:
     k3s_upgrade: agent
 spec:
   concurrency: 1
+  %{~ if version == "" ~}
   channel: https://update.k3s.io/v1-release/channels/${channel}
+  %{~ else ~}
+  version: ${version}
+  %{~ endif ~}
   serviceAccountName: system-upgrade
   nodeSelector:
     matchExpressions:
@@ -24,9 +28,29 @@ spec:
   prepare:
     image: rancher/k3s-upgrade
     args: ["prepare", "k3s-server"]
-  drain:
+  %{ if drain }drain:
     force: true
-    skipWaitForDeleteTimeout: 60
+    disableEviction: ${disable_eviction}
+    skipWaitForDeleteTimeout: 60%{ endif }
+  %{ if !drain }cordon: true%{ endif }
+  %{~ if upgrade_window != null ~}
+  window:
+    %{~ if length(try(upgrade_window.days, [])) > 0 ~}
+    days:
+      %{~ for day in try(upgrade_window.days, []) ~}
+      - ${jsonencode(day)}
+      %{~ endfor ~}
+    %{~ endif ~}
+    %{~ if coalesce(try(upgrade_window.startTime, ""), "") != "" ~}
+    startTime: ${jsonencode(coalesce(try(upgrade_window.startTime, ""), ""))}
+    %{~ endif ~}
+    %{~ if coalesce(try(upgrade_window.endTime, ""), "") != "" ~}
+    endTime: ${jsonencode(coalesce(try(upgrade_window.endTime, ""), ""))}
+    %{~ endif ~}
+    %{~ if coalesce(try(upgrade_window.timeZone, ""), "") != "" ~}
+    timeZone: ${jsonencode(coalesce(try(upgrade_window.timeZone, ""), ""))}
+    %{~ endif ~}
+  %{~ endif ~}
   upgrade:
     image: rancher/k3s-upgrade
 ---
@@ -40,7 +64,11 @@ metadata:
     k3s_upgrade: server
 spec:
   concurrency: 1
+  %{~ if version == "" ~}
   channel: https://update.k3s.io/v1-release/channels/${channel}
+  %{~ else ~}
+  version: ${version}
+  %{~ endif ~}
   serviceAccountName: system-upgrade
   nodeSelector:
     matchExpressions:
@@ -52,5 +80,23 @@ spec:
     - {key: node-role.kubernetes.io/control-plane, effect: NoSchedule, operator: Exists}
     - {key: CriticalAddonsOnly, effect: NoExecute, operator: Exists}
   cordon: true
+  %{~ if upgrade_window != null ~}
+  window:
+    %{~ if length(try(upgrade_window.days, [])) > 0 ~}
+    days:
+      %{~ for day in try(upgrade_window.days, []) ~}
+      - ${jsonencode(day)}
+      %{~ endfor ~}
+    %{~ endif ~}
+    %{~ if coalesce(try(upgrade_window.startTime, ""), "") != "" ~}
+    startTime: ${jsonencode(coalesce(try(upgrade_window.startTime, ""), ""))}
+    %{~ endif ~}
+    %{~ if coalesce(try(upgrade_window.endTime, ""), "") != "" ~}
+    endTime: ${jsonencode(coalesce(try(upgrade_window.endTime, ""), ""))}
+    %{~ endif ~}
+    %{~ if coalesce(try(upgrade_window.timeZone, ""), "") != "" ~}
+    timeZone: ${jsonencode(coalesce(try(upgrade_window.timeZone, ""), ""))}
+    %{~ endif ~}
+  %{~ endif ~}
   upgrade:
     image: rancher/k3s-upgrade

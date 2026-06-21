@@ -14,6 +14,8 @@ spec:
         name: kured
     spec:
       serviceAccountName: kured
+      tolerations:
+        - operator: Exists
       containers:
         - name: kured
           command:
@@ -21,4 +23,3 @@ spec:
             %{~ for key, value in options ~}
             - --${key}=${value}
             %{~ endfor ~}
-

@@ -41,3 +41,26 @@ kustomization.yaml
 *kustomization_backup.yaml
 kube.tf
 .terraform.lock.hcl
+issue_fix.patch
+
+# AI related files
+CLAUDE.md
+kube-hetzner-knowledge.jsondata
+
+# Misc
+.DS_Store
+
+requirements/*
+
+# Ignore IntelliJ related files
+.idea
+
+# Local triage documentation
+issues/
+prs/
+
+# Local analysis artifacts
+.tldr/
+.tldrignore
+scripts/process_ideas_v3.py
+tasks/
